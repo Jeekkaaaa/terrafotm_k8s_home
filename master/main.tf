@@ -18,8 +18,12 @@ provider "proxmox" {
 locals {
   seed = timestamp()
   vm_id = 4100 + (parseint(formatdate("SS", local.seed), 10) % 100)
+  
+  # Исправлено: mac_hex должна быть внутри local
   mac_hex = format("%06x", parseint(substr(sha256(local.seed), 0, 6), 16))
-  mac_address = "52:54:00:${substr(mac_hex, 0, 2)}:${substr(mac_hex, 2, 2)}:${substr(mac_hex, 4, 2)}"
+  
+  # Теперь правильно ссылаемся на local.mac_hex
+  mac_address = "52:54:00:${substr(local.mac_hex, 0, 2)}:${substr(local.mac_hex, 2, 2)}:${substr(local.mac_hex, 4, 2)}"
 }
 
 # Основная ВМ
@@ -74,7 +78,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
     command = "echo 'Ожидание первого IP...' && sleep 30"
   }
 
-  # ======= ПЕРЕЗАГРУЗКА ДЛЯ НОВОГО IP =======
+  # ПЕРЕЗАГРУЗКА ДЛЯ НОВОГО IP
   provisioner "local-exec" {
     command = <<-EOT
       echo "Перезагрузка ВМ ${self.vmid}..."
