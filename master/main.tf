@@ -21,8 +21,11 @@ resource "proxmox_vm_qemu" "k8s_master" {
   description = "Первая мастер-нода кластера Kubernetes"
   start_at_node_boot = true
 
-  cores   = 4
-  sockets = 1
+  cpu {
+    cores   = 4
+    sockets = 1
+  }
+  
   memory  = 8192
 
   clone      = "9000"

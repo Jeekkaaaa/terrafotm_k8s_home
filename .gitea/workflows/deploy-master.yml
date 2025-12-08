@@ -8,9 +8,15 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Generate SSH Key
+        run: |
+          mkdir -p /root/.ssh
+          ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q
+          echo "SSH Public Key:"
+          cat /root/.ssh/id_ed25519.pub
+
       - name: Configure Terraform Local Cache
         run: |
-          # Создаём минимальный конфиг для использования локального провайдера
           cat > /root/.terraformrc << 'EOF'
           provider_installation {
             filesystem_mirror {
@@ -22,8 +28,6 @@ jobs:
             }
           }
           EOF
-          echo "Terraform config created:"
-          cat /root/.terraformrc
 
       - name: Clean Terraform Cache
         run: |
