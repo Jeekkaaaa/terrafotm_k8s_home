@@ -31,11 +31,21 @@ resource "proxmox_vm_qemu" "k8s_master" {
   clone      = "ubuntu-template"
   full_clone = true
 
+  # Системный диск
   disk {
     slot    = "scsi0"
     size    = "50G"
     storage = "big_oleg"
-    type    = "disk"
+    type    = "scsi"
+  }
+
+  # Cloud-Init диск (КРИТИЧЕСКИ ВАЖНО!)
+  disk {
+    slot     = "ide2"
+    storage  = "big_oleg"
+    type     = "cdrom"
+    size     = "4M"
+    format   = "raw"
   }
 
   network {
@@ -44,33 +54,60 @@ resource "proxmox_vm_qemu" "k8s_master" {
     bridge = "vmbr0"
   }
 
-  ciuser     = "ubuntu"
-  sshkeys    = file(var.ssh_public_key_path)
-  ipconfig0  = "ip=dhcp"
-  nameserver = "8.8.8.8"
-  agent      = 1
+  # Cloud-Init настройки
+  os_type     = "cloud-init"  # Явно указываем тип ОС
+  ciuser      = "ubuntu"
+  sshkeys     = file(var.ssh_public_key_path)
+  ipconfig0   = "ip=dhcp"
+  nameserver  = "8.8.8.8"
+  searchdomain = "local"
 
-  # Задержка перед remote-exec
+  # Включаем гостевой агент
+  agent = 1
+
+  # Ожидание перед remote-exec (увеличено)
+  provisioner "local-exec" {
+    command = "echo 'Waiting for Cloud-Init and guest agent...'; sleep 120"
+  }
+
+  # Проверка доступности через гостевой агент
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Checking VM IP via guest agent..."
+      max_attempts=30
+      for i in $(seq 1 $max_attempts); do
+        if qm guest cmd 4000 ping >/dev/null 2>&1; then
+          echo "Guest agent is responding!"
+          IP=$(qm guest cmd 4000 network-get-interfaces 2>/dev/null | \
+               jq -r '.data[] | ."ip-addresses"[] | select(."ip-address-type"=="ipv4" and ."ip-address"!="127.0.0.1") | ."ip-address"' | head -1)
+          if [ -n "$IP" ]; then
+            echo "VM IP: $IP"
+            echo "$IP" > /tmp/vm-4000-ip.txt
+            break
+          fi
+        fi
+        echo "Attempt $i/$max_attempts: Guest agent not ready yet..."
+        sleep 10
+      done
+    EOT
+  }
+
+  # Remote-exec с динамическим IP
   provisioner "remote-exec" {
     inline = ["echo 'VM is ready for SSH'"]
     
     connection {
       type        = "ssh"
-      user        = self.ciuser
+      user        = "ubuntu"
       private_key = file(var.ssh_private_key_path)
-      host        = self.default_ipv4_address
+      host        = fileexists("/tmp/vm-4000-ip.txt") ? file("/tmp/vm-4000-ip.txt") : "192.168.0.100"
       timeout     = "10m"
     }
   }
 
-  # Ожидание запуска гостевого агента
-  provisioner "local-exec" {
-    command = "echo 'Waiting for guest agent to start...'; sleep 90"
-  }
-
   timeouts {
-    create = "15m"
-    update = "15m"
+    create = "20m"
+    update = "20m"
   }
 
   lifecycle {
@@ -79,7 +116,15 @@ resource "proxmox_vm_qemu" "k8s_master" {
       sshkeys,
       ipconfig0,
       nameserver,
-      agent
+      agent,
+      disk[1]  # Игнорируем изменения Cloud-Init диска
     ]
   }
+}
+
+# Output для отладки
+output "vm_ip" {
+  value = proxmox_vm_qemu.k8s_master.default_ipv4_address
+  description = "IP адрес ВМ через гостевой агент"
+  depends_on = [proxmox_vm_qemu.k8s_master]
 }
