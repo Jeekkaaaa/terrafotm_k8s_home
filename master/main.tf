@@ -40,11 +40,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
     format  = "raw"
   }
 
-  # Cloud-Init диск
+  # Cloud-Init диск (ИСПРАВЛЕНО: format = "qcow2")
   disk {
     slot    = "ide2"
     storage = "big_oleg"
     type    = "cloudinit"
+    format  = "qcow2"  # ← КРИТИЧЕСКИ ВАЖНО!
   }
 
   network {
@@ -64,17 +65,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
 
   # Ожидание Cloud-Init
   provisioner "local-exec" {
-    command = "echo 'Ожидание завершения Cloud-Init...'; sleep 300"
+    command = "echo 'Ожидание завершения Cloud-Init...'; sleep 180"
   }
 
-  # Проверка создания ВМ
+  # Простая проверка
   provisioner "remote-exec" {
-    inline = [
-      "echo '=== ВМ k8s-master-01 успешно создана ==='",
-      "echo 'Дата: $(date)'",
-      "echo 'Проверка сети:'",
-      "ip -4 addr show"
-    ]
+    inline = ["echo 'VM created successfully'"]
     
     connection {
       type        = "ssh"
@@ -85,19 +81,6 @@ resource "proxmox_vm_qemu" "k8s_master" {
     }
     
     on_failure = continue
-  }
-
-  # Финальное сообщение
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "========================================="
-      echo "ВМ создана: k8s-master-01 (VMID: 4000)"
-      echo "Проверьте в Proxmox:"
-      echo "1. qm config 4000 | grep ide2"
-      echo "2. qm guest cmd 4000 ping"
-      echo "3. qm guest cmd 4000 network-get-interfaces"
-      echo "========================================="
-    EOT
   }
 
   timeouts {
@@ -117,16 +100,22 @@ resource "proxmox_vm_qemu" "k8s_master" {
   }
 }
 
-output "vm_status" {
+# Output переменные (ДОБАВЬТЕ ЭТО!)
+output "vm_info" {
   value = "ВМ ${proxmox_vm_qemu.k8s_master.name} создана (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
+}
+
+output "vm_ip" {
+  value = proxmox_vm_qemu.k8s_master.default_ipv4_address
+  description = "IP адрес ВМ через гостевой агент"
 }
 
 output "check_commands" {
   value = <<-EOT
     Проверка после создания:
     1. Проверить Cloud-Init: qm config 4000 | grep ide2
+       (должно быть: ide2: big_oleg:4000/vm-4000-cloudinit.qcow2,media=cdrom)
     2. Проверить гостевой агент: qm guest cmd 4000 ping
     3. Проверить IP: qm guest cmd 4000 network-get-interfaces
-    4. Если агент не работает: установить в ВМ qemu-guest-agent
   EOT
 }
