@@ -1,3 +1,13 @@
+# КЛЮЧЕВОЙ БЛОК: Определение провайдера
+terraform {
+  required_providers {
+    proxmox = {
+      source  = "telmate/proxmox" # Явно указываем правильный источник
+      version = "~> 2.9.14"
+    }
+  }
+}
+
 # Создание мастер-ноды Kubernetes
 resource "proxmox_vm_qemu" "k8s_master" {
   # 1. Базовые параметры
