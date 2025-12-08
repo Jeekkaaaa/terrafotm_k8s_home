@@ -40,15 +40,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
     format  = "raw"
   }
 
-  # Cloud-Init диск (ИСПРАВЛЕНО: type = "cloudinit")
+  # Cloud-Init диск
   disk {
     slot    = "ide2"
     storage = "big_oleg"
     type    = "cloudinit"
   }
-
-  # Явное указание storage для Cloud-Init данных
-  cloudinit_cdrom_storage = "big_oleg"
 
   network {
     id     = 0
@@ -65,18 +62,18 @@ resource "proxmox_vm_qemu" "k8s_master" {
   # Включаем гостевой агент
   agent = 1
 
-  # Ожидание Cloud-Init (увеличено)
+  # Ожидание Cloud-Init
   provisioner "local-exec" {
     command = "echo 'Ожидание завершения Cloud-Init...'; sleep 300"
   }
 
-  # Простой remote-exec с проверкой
+  # Проверка создания ВМ
   provisioner "remote-exec" {
     inline = [
       "echo '=== ВМ k8s-master-01 успешно создана ==='",
       "echo 'Дата: $(date)'",
-      "echo 'Cloud-init статус:'",
-      "cloud-init status || echo 'Cloud-init не установлен'"
+      "echo 'Проверка сети:'",
+      "ip -4 addr show"
     ]
     
     connection {
@@ -87,18 +84,18 @@ resource "proxmox_vm_qemu" "k8s_master" {
       timeout     = "10m"
     }
     
-    # Продолжить даже если SSH не подключится
     on_failure = continue
   }
 
-  # Информационное сообщение после создания
+  # Финальное сообщение
   provisioner "local-exec" {
     command = <<-EOT
       echo "========================================="
-      echo "ВМ k8s-master-01 (VMID: 4000) создана!"
-      echo "Проверьте статус:"
-      echo "  qm status 4000"
-      echo "  qm config 4000 | grep ide2"
+      echo "ВМ создана: k8s-master-01 (VMID: 4000)"
+      echo "Проверьте в Proxmox:"
+      echo "1. qm config 4000 | grep ide2"
+      echo "2. qm guest cmd 4000 ping"
+      echo "3. qm guest cmd 4000 network-get-interfaces"
       echo "========================================="
     EOT
   }
@@ -115,24 +112,21 @@ resource "proxmox_vm_qemu" "k8s_master" {
       ipconfig0,
       nameserver,
       agent,
-      disk[1]  # Cloud-Init диск
+      disk[1]
     ]
   }
 }
 
-output "vm_created" {
+output "vm_status" {
   value = "ВМ ${proxmox_vm_qemu.k8s_master.name} создана (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
-  description = "Статус создания ВМ"
 }
 
-output "next_steps" {
+output "check_commands" {
   value = <<-EOT
-    Дальнейшие действия:
-    1. Проверьте Cloud-Init диск: qm config 4000 | grep ide2
-       (должно быть: ide2: big_oleg:4000/vm-4000-cloudinit.qcow2,media=cdrom)
-    2. Проверьте гостевой агент: qm guest cmd 4000 ping
-    3. Если агент не работает, установите в ВМ:
-       sudo apt update && sudo apt install -y qemu-guest-agent
-    4. Проверьте IP: qm guest cmd 4000 network-get-interfaces
+    Проверка после создания:
+    1. Проверить Cloud-Init: qm config 4000 | grep ide2
+    2. Проверить гостевой агент: qm guest cmd 4000 ping
+    3. Проверить IP: qm guest cmd 4000 network-get-interfaces
+    4. Если агент не работает: установить в ВМ qemu-guest-agent
   EOT
 }
