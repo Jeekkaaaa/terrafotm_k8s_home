@@ -48,21 +48,29 @@ resource "proxmox_vm_qemu" "k8s_master" {
   sshkeys    = file(var.ssh_public_key_path)
   ipconfig0  = "ip=dhcp"
   nameserver = "8.8.8.8"
-  agent      = 1  # ВКЛЮЧАЕМ гостевой агент!
+  agent      = 1
 
+  # Задержка перед remote-exec
   provisioner "remote-exec" {
     inline = ["echo 'VM is ready for SSH'"]
+    
     connection {
       type        = "ssh"
       user        = self.ciuser
       private_key = file(var.ssh_private_key_path)
-      host        = self.default_ipv4_address  # Будет работать с агентом!
+      host        = self.default_ipv4_address
+      timeout     = "10m"
     }
   }
 
+  # Ожидание запуска гостевого агента
+  provisioner "local-exec" {
+    command = "echo 'Waiting for guest agent to start...'; sleep 90"
+  }
+
   timeouts {
-    create = "10m"
-    update = "10m"
+    create = "15m"
+    update = "15m"
   }
 
   lifecycle {
@@ -70,7 +78,8 @@ resource "proxmox_vm_qemu" "k8s_master" {
       ciuser,
       sshkeys,
       ipconfig0,
-      nameserver
+      nameserver,
+      agent
     ]
   }
 }
