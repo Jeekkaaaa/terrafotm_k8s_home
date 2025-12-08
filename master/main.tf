@@ -1,18 +1,8 @@
 terraform {
-  required_version = ">= 1.0"
-  
   required_providers {
     proxmox = {
       source  = "telmate/proxmox"
       version = "3.0.2-rc06"
-    }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
-    external = {
-      source  = "hashicorp/external"
-      version = "~> 2.3"
     }
   }
 }
@@ -24,36 +14,22 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
-# Генерация случайного MAC-адреса для ВМ
-resource "random_integer" "mac_part1" {
-  min = 0
-  max = 255
-}
-
-resource "random_integer" "mac_part2" {
-  min = 0
-  max = 255
-}
-
-resource "random_integer" "mac_part3" {
-  min = 0
-  max = 255
-}
-
-# Генерация случайного VMID (проще чем external data source)
-resource "random_integer" "vmid" {
-  min = 4000
-  max = 4099
-  keepers = {
-    # Изменяем при каждом запуске
-    timestamp = timestamp()
-  }
-}
-
-# Локальный провайдер для поиска свободного VMID (альтернатива)
+# Локальные переменные для генерации уникальных значений
 locals {
-  # Используем random VMID - проще и надежнее
-  vm_id = random_integer.vmid.result
+  # Используем хеш от timestamp для уникальности
+  unique_seed = sha256(timestamp())
+  
+  # VMID: 4000-4099 на основе хеша
+  vm_id = 4000 + (parseint(substr(local.unique_seed, 0, 2), 16) % 100)
+  
+  # Генерация MAC на основе хеша
+  mac_part1 = parseint(substr(local.unique_seed, 2, 2), 16) % 256
+  mac_part2 = parseint(substr(local.unique_seed, 4, 2), 16) % 256
+  mac_part3 = parseint(substr(local.unique_seed, 6, 2), 16) % 256
+  
+  # Форматированный MAC
+  mac_address = format("52:54:00:%02x:%02x:%02x", 
+    local.mac_part1, local.mac_part2, local.mac_part3)
 }
 
 # Основная ВМ
@@ -61,7 +37,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
   name        = "k8s-master-${local.vm_id}"
   target_node = var.target_node
   vmid        = local.vm_id
-  description = "Мастер-нода кластера Kubernetes (случайный MAC, случайный VMID)"
+  description = "Мастер-нода кластера Kubernetes (динамический MAC: ${local.mac_address})"
   start_at_node_boot = true
 
   cpu {
@@ -90,16 +66,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
     type    = "cloudinit"
   }
 
-  # Сеть со случайным MAC-адресом
+  # Сеть с динамическим MAC-адресом
   network {
-    id     = 0
-    model  = "virtio"
-    bridge = "vmbr0"
-    # Случайный MAC-адрес (формат QEMU: 52:54:00:xx:xx:xx)
-    macaddr = format("52:54:00:%02x:%02x:%02x",
-      random_integer.mac_part1.result,
-      random_integer.mac_part2.result,
-      random_integer.mac_part3.result)
+    id      = 0
+    model   = "virtio"
+    bridge  = "vmbr0"
+    macaddr = local.mac_address
   }
 
   # Cloud-Init настройки
@@ -114,19 +86,16 @@ resource "proxmox_vm_qemu" "k8s_master" {
   # Контроллер SCSI
   scsihw = "virtio-scsi-pci"
 
-  # Ожидание DHCP
+  # Ожидание DHCP (уменьшил время)
   provisioner "local-exec" {
-    command = "echo 'Ждём получения IP через DHCP...' && sleep 60"
+    command = "echo 'Ожидание получения IP через DHCP...' && sleep 30"
   }
 
   # Обновление агента через SSH
   provisioner "remote-exec" {
     inline = [
-      "echo 'Настройка ВМ...'",
-      "sudo apt update",
-      "sudo apt install -y qemu-guest-agent 2>/dev/null || echo 'Агент уже установлен'",
-      "sudo systemctl start qemu-guest-agent 2>/dev/null || true",
-      "echo 'Готово. IP: $(hostname -I)'"
+      "echo 'Настройка ВМ завершена'",
+      "sudo systemctl start qemu-guest-agent 2>/dev/null || true"
     ]
     
     connection {
@@ -134,28 +103,16 @@ resource "proxmox_vm_qemu" "k8s_master" {
       user        = "ubuntu"
       private_key = file(var.ssh_private_key_path)
       host        = self.default_ipv4_address
-      timeout     = "10m"
-      bastion_host = null
-      agent        = false
+      timeout     = "5m"
+      agent       = false
     }
     
     on_failure = continue
   }
 
-  # Очистка SSH known_hosts для нового IP
-  provisioner "local-exec" {
-    command = <<-EOT
-      sleep 30
-      if [ -n "${self.default_ipv4_address}" ]; then
-        ssh-keygen -f '/root/.ssh/known_hosts' -R "${self.default_ipv4_address}" 2>/dev/null || true
-        echo "Очищен known_hosts для ${self.default_ipv4_address}"
-      fi
-    EOT
-  }
-
   timeouts {
-    create = "30m"
-    update = "30m"
+    create = "15m"
+    update = "15m"
   }
 
   lifecycle {
@@ -166,11 +123,11 @@ resource "proxmox_vm_qemu" "k8s_master" {
       nameserver,
       agent,
       disk[1],
-      # Игнорируем изменения MAC после создания
-      network[0].macaddr
+      network[0].macaddr,
+      vmid
     ]
     
-    # Принудительно пересоздаём при изменении VMID
+    # Нужно пересоздать при изменении VMID или MAC
     create_before_destroy = true
   }
 }
@@ -182,12 +139,10 @@ output "vm_info" {
 
 output "vm_mac" {
   value = proxmox_vm_qemu.k8s_master.network[0].macaddr
-  description = "MAC-адрес ВМ"
 }
 
 output "vm_ip" {
   value = proxmox_vm_qemu.k8s_master.default_ipv4_address
-  description = "IP адрес через DHCP"
 }
 
 output "ssh_command" {
