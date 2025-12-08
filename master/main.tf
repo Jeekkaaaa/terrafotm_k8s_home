@@ -40,15 +40,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
     format  = "raw"
   }
 
-  # Cloud-Init диск (ПРАВИЛЬНЫЙ СИНТАКСИС)
+  # Cloud-Init диск (ПРОСТОЙ СИНТАКСИС)
   disk {
     slot    = "ide2"
     storage = "big_oleg"
     type    = "cloudinit"
   }
-
-  # Явное указание storage для Cloud-Init
-  cloudinit_cdrom_storage_pool = "big_oleg"
 
   network {
     id     = 0
@@ -62,12 +59,27 @@ resource "proxmox_vm_qemu" "k8s_master" {
   ipconfig0  = "ip=dhcp"
   nameserver = "8.8.8.8"
   
-  # Включаем гостевой агент (новый формат)
-  agent = "enabled=1,fstrim_cloned_disks=1"
+  # Гостевой агент (число 1, а не строка)
+  agent = 1
 
   # Ожидание Cloud-Init
   provisioner "local-exec" {
     command = "echo 'Ожидание завершения Cloud-Init...'; sleep 180"
+  }
+
+  # Проверка SSH (опционально)
+  provisioner "remote-exec" {
+    inline = ["echo 'VM is ready'"]
+    
+    connection {
+      type        = "ssh"
+      user        = "ubuntu"
+      private_key = file(var.ssh_private_key_path)
+      host        = self.default_ipv4_address
+      timeout     = "10m"
+    }
+    
+    on_failure = continue
   }
 
   timeouts {
