@@ -19,12 +19,43 @@ jobs:
       - name: Configure Terraform Local Cache
         run: |
           cat > /root/.terraformrc << 'EOF'
-provider_installation {
-  filesystem_mirror {
-    path    = "/root/.terraform.d/plugins"
-    include = ["registry.terraform.io/*/*"]
-  }
-  direct {
-    exclude = ["registry.terraform.io/*/*"]
-  }
-}
+          provider_installation {
+            filesystem_mirror {
+              path    = "/root/.terraform.d/plugins"
+              include = ["registry.terraform.io/*/*"]
+            }
+            direct {
+              exclude = ["registry.terraform.io/*/*"]
+            }
+          }
+          EOF
+
+      - name: Clean Terraform Cache
+        run: |
+          cd master/
+          rm -rf .terraform .terraform.lock.hcl
+
+      - name: Terraform Init & Plan
+        run: |
+          cd master/
+          terraform init
+          terraform plan -input=false -out=tfplan
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          TF_VAR_target_node: "pve"
+          TF_VAR_ssh_public_key_path: "/root/.ssh/id_ed25519.pub"
+          TF_VAR_ssh_private_key_path: "/root/.ssh/id_ed25519"
+
+      - name: Terraform Apply
+        run: |
+          cd master/
+          terraform apply -input=false -auto-approve tfplan
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          TF_VAR_target_node: "pve"
+          TF_VAR_ssh_public_key_path: "/root/.ssh/id_ed25519.pub"
+          TF_VAR_ssh_private_key_path: "/root/.ssh/id_ed25519"
