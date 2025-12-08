@@ -31,25 +31,20 @@ resource "proxmox_vm_qemu" "k8s_master" {
   clone      = "ubuntu-template"
   full_clone = true
 
-  # НОВЫЙ СИНТАКСИС ДИСКОВ
-  disks {
-    scsi {
-      scsi0 {
-        disk {
-          size    = "50G"
-          storage = "big_oleg"
-          format  = "raw"
-        }
-      }
-    }
-    
-    ide {
-      ide2 {
-        cloudinit {
-          storage = "big_oleg"
-        }
-      }
-    }
+  # Системный диск
+  disk {
+    slot    = "scsi0"
+    size    = "50G"
+    storage = "big_oleg"
+    type    = "disk"
+    format  = "raw"
+  }
+
+  # Cloud-Init диск (важно: используем cloud-init тип)
+  disk {
+    slot    = "ide2"
+    storage = "big_oleg"
+    type    = "cloudinit"
   }
 
   network {
@@ -58,17 +53,17 @@ resource "proxmox_vm_qemu" "k8s_master" {
     bridge = "vmbr0"
   }
 
+  # Cloud-Init настройки
   ciuser     = "ubuntu"
   sshkeys    = file(var.ssh_public_key_path)
   ipconfig0  = "ip=dhcp"
   nameserver = "8.8.8.8"
   
-  agent = 1
+  # Агент (правильный формат!)
+  agent = "enabled=1,fstrim_cloned_disks=1"
 
-  # Минимальный provisioner
-  provisioner "local-exec" {
-    command = "echo 'ВМ создана. Проверьте: qm config 4000'"
-  }
+  # Контроллер SCSI как в темплейте
+  scsihw = "virtio-scsi-pci"
 
   timeouts {
     create = "30m"
@@ -82,15 +77,19 @@ resource "proxmox_vm_qemu" "k8s_master" {
       ipconfig0,
       nameserver,
       agent,
-      disks  # Игнорируем изменения дисков
+      disk[1]  # Cloud-Init диск
     ]
   }
 }
 
-output "vm_info" {
+output "vm_status" {
   value = "ВМ ${proxmox_vm_qemu.k8s_master.name} (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
 }
 
 output "check_commands" {
-  value = "Проверьте: qm config 4000 | grep ide2 && qm guest cmd 4000 ping"
+  value = <<-EOT
+    После создания проверьте:
+    1. qm config 4000 | grep -E "agent|ide2"
+    2. qm agent 4000 network-get-interfaces
+  EOT
 }
