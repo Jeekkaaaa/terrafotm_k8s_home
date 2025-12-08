@@ -39,7 +39,7 @@ jobs:
         run: |
           cd master/
           terraform init
-          terraform plan
+          terraform plan -input=false -out=tfplan
         env:
           PM_API_URL: ${{ secrets.PM_API_URL }}
           PM_API_TOKEN_ID: ${{ secrets.PM_API_TOKEN_ID }}
@@ -48,7 +48,7 @@ jobs:
       - name: Terraform Apply
         run: |
           cd master/
-          terraform apply -auto-approve
+          terraform apply -input=false -auto-approve tfplan
         env:
           PM_API_URL: ${{ secrets.PM_API_URL }}
           PM_API_TOKEN_ID: ${{ secrets.PM_API_TOKEN_ID }}
