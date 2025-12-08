@@ -28,7 +28,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
   
   memory  = 8192
 
-  clone      = "9000"
+  clone      = "ubuntu-template"
   full_clone = true
 
   disk {
