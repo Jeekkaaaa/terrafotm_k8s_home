@@ -16,14 +16,15 @@ provider "proxmox" {
 
 # Генерация уникального MAC и VMID
 locals {
-  seed = timestamp()
-  vm_id = 4100 + (parseint(formatdate("SS", local.seed), 10) % 100)
+  timestamp = timestamp()
   
-  # Исправлено: mac_hex должна быть внутри local
-  mac_hex = format("%06x", parseint(substr(sha256(local.seed), 0, 6), 16))
+  # VMID: 4100-4199 на основе миллисекунд времени
+  # Берем последние 2 цифры от UNIX timestamp
+  vm_id = 4100 + (parseint(substr(local.timestamp, -2, 2), 10) % 100)
   
-  # Теперь правильно ссылаемся на local.mac_hex
-  mac_address = "52:54:00:${substr(local.mac_hex, 0, 2)}:${substr(local.mac_hex, 2, 2)}:${substr(local.mac_hex, 4, 2)}"
+  # MAC: генерируем из хеша времени
+  mac_hash = substr(sha256(local.timestamp), 0, 6)
+  mac_address = "52:54:${substr(local.mac_hash, 0, 2)}:${substr(local.mac_hash, 2, 2)}:${substr(local.mac_hash, 4, 2)}"
 }
 
 # Основная ВМ
@@ -73,35 +74,18 @@ resource "proxmox_vm_qemu" "k8s_master" {
   agent = 1
   scsihw = "virtio-scsi-pci"
 
-  # Ждем получения первого IP
+  # Ждем получения IP
   provisioner "local-exec" {
-    command = "echo 'Ожидание первого IP...' && sleep 30"
+    command = "echo 'Ожидание IP...' && sleep 30"
   }
 
-  # ПЕРЕЗАГРУЗКА ДЛЯ НОВОГО IP
+  # Перезагрузка для нового IP
   provisioner "local-exec" {
     command = <<-EOT
-      echo "Перезагрузка ВМ ${self.vmid}..."
+      echo "Перезагрузка ВМ для нового IP..."
       qm reboot ${self.vmid}
-      echo "Ждем 40 секунд..."
-      sleep 40
+      sleep 45
     EOT
-  }
-
-  # Проверяем IP после перезагрузки
-  provisioner "remote-exec" {
-    inline = [
-      "echo 'ВМ перезагружена. Текущий IP: $(hostname -I)'",
-      "sudo systemctl enable --now qemu-guest-agent"
-    ]
-    
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = file(var.ssh_private_key_path)
-      host        = self.default_ipv4_address
-      timeout     = "5m"
-    }
   }
 
   lifecycle {
@@ -115,6 +99,10 @@ resource "proxmox_vm_qemu" "k8s_master" {
 # Output
 output "vm_info" {
   value = "ВМ ${proxmox_vm_qemu.k8s_master.name} (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
+}
+
+output "vm_mac" {
+  value = local.mac_address
 }
 
 output "vm_ip" {
