@@ -19,7 +19,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
   target_node = var.target_node
   vmid        = 4000
   description = "Первая мастер-нода кластера Kubernetes"
-  onboot      = true
+  start_at_node_boot = true
 
   cores   = 4
   sockets = 1
