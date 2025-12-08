@@ -31,18 +31,18 @@ resource "proxmox_vm_qemu" "k8s_master" {
   clone      = "ubuntu-template"
   full_clone = true
 
-  # Системный диск
+  # Системный диск (FIXED: slot как строка, type как "disk")
   disk {
-    slot    = 0
+    slot    = "scsi0"
     size    = "50G"
     storage = "big_oleg"
-    type    = "scsi"
+    type    = "disk"
     format  = "raw"
   }
 
-  # Cloud-Init диск (КРИТИЧЕСКИ ВАЖЕН!)
+  # Cloud-Init диск (FIXED: slot как "ide2")
   disk {
-    slot    = 2
+    slot    = "ide2"
     storage = "big_oleg"
     type    = "cdrom"
     size    = "4M"
@@ -56,7 +56,6 @@ resource "proxmox_vm_qemu" "k8s_master" {
   }
 
   # Cloud-Init настройки
-  os_type    = "cloud-init"
   ciuser     = "ubuntu"
   sshkeys    = file(var.ssh_public_key_path)
   ipconfig0  = "ip=dhcp"
@@ -65,59 +64,73 @@ resource "proxmox_vm_qemu" "k8s_master" {
   # Включаем гостевой агент
   agent = 1
 
-  # Ожидание Cloud-Init
+  # Ожидание Cloud-Init (увеличено до 3 минут)
   provisioner "local-exec" {
     command = "echo 'Ожидание завершения Cloud-Init...'; sleep 180"
   }
 
-  # Проверка IP через гостевой агент
+  # Проверка IP через гостевой агент (упрощённая версия)
   provisioner "local-exec" {
     command = <<-EOT
       echo "Проверка гостевого агента..."
+      max_attempts=30
       IP=""
-      for i in {1..30}; do
+      
+      for i in $(seq 1 $max_attempts); do
+        # Пытаемся получить IP через гостевой агент
         if qm guest cmd 4000 ping >/dev/null 2>&1; then
-          echo "Гостевой агент доступен!"
-          IP=$(qm guest cmd 4000 network-get-interfaces 2>/dev/null | \
-               jq -r '.data[] | ."ip-addresses"[] | select(."ip-address-type"=="ipv4") | ."ip-address"' | \
-               grep -v "127.0.0.1" | head -1)
+          echo "Гостевой агент доступен на попытке $i"
+          
+          # Пытаемся получить IP
+          AGENT_OUTPUT=$(qm guest cmd 4000 network-get-interfaces 2>/dev/null || echo "")
+          if echo "$AGENT_OUTPUT" | grep -q "ip-address"; then
+            IP=$(echo "$AGENT_OUTPUT" | jq -r '.data[] | ."ip-addresses"[] | select(."ip-address-type"=="ipv4") | ."ip-address"' | grep -v "127.0.0.1" | head -1)
+            if [ -n "$IP" ]; then
+              echo "Найден IP через гостевой агент: $IP"
+              echo "$IP" > /tmp/vm-4000-ip.txt
+              break
+            fi
+          fi
+        fi
+        
+        # Пробуем через ARP как fallback
+        MAC=$(qm config 4000 | grep 'net0:' | sed "s/.*=//" | cut -d',' -f1)
+        if [ -n "$MAC" ]; then
+          IP=$(arp -an | grep -i "$MAC" | grep -oP '\(\K[^)]+' | head -1)
           if [ -n "$IP" ]; then
-            echo "Найден IP: $IP"
+            echo "Найден IP через ARP: $IP"
             echo "$IP" > /tmp/vm-4000-ip.txt
             break
           fi
         fi
-        echo "Попытка $i/30: агент ещё не готов..."
+        
+        echo "Попытка $i/$max_attempts: IP не найден, ждём 10 секунд..."
         sleep 10
       done
       
       if [ -z "$IP" ]; then
-        echo "Предупреждение: IP не найден через гостевой агент"
-        echo "Использую поиск по ARP..."
-        # Получаем MAC-адрес из конфига
-        MAC=$(qm config 4000 | grep 'net0:' | sed "s/.*=//" | cut -d',' -f1)
-        IP=$(arp -an | grep -i "$MAC" | grep -oP '\(\K[^)]+')
-        if [ -n "$IP" ]; then
-          echo "Найден IP через ARP: $IP"
-          echo "$IP" > /tmp/vm-4000-ip.txt
-        fi
+        echo "Предупреждение: IP не найден ни одним методом"
+        echo "remote-exec будет использовать default_ipv4_address"
+      else
+        echo "Используем IP: $IP"
       fi
     EOT
   }
 
-  # Подключение по SSH (динамический IP)
+  # Подключение по SSH
   provisioner "remote-exec" {
     inline = [
-      "echo 'ВМ успешно создана!'",
-      "hostname",
-      "ip addr show"
+      "echo '=== ВМ успешно создана ==='",
+      "echo 'Hostname: $(hostname)'",
+      "echo 'IP-адреса:'",
+      "ip -4 addr show | grep inet"
     ]
     
     connection {
       type        = "ssh"
       user        = "ubuntu"
       private_key = file(var.ssh_private_key_path)
-      host        = fileexists("/tmp/vm-4000-ip.txt") ? file("/tmp/vm-4000-ip.txt") : self.default_ipv4_address
+      host        = fileexists("/tmp/vm-4000-ip.txt") ? trimspace(file("/tmp/vm-4000-ip.txt")) : self.default_ipv4_address
       timeout     = "10m"
     }
   }
@@ -129,12 +142,13 @@ resource "proxmox_vm_qemu" "k8s_master" {
 
   lifecycle {
     ignore_changes = [
-      disk[1],  # Cloud-Init диск
       ciuser,
       sshkeys,
       ipconfig0,
       nameserver,
-      agent
+      agent,
+      # Игнорируем Cloud-Init диск, чтобы не было дрифта
+      disk[1]
     ]
   }
 }
