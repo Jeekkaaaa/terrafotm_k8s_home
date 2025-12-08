@@ -8,28 +8,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure Local Provider Cache
-        run: |
-          # Гарантируем существование каталога для плагинов
-          mkdir -p /root/.terraform.d/plugins
-          # Создаем конфиг, который ПЕРЕХВАТЫВАЕТ ВСЕ запросы к registry.terraform.io
-          cat > /tmp/terraform.rc << 'EOF'
-          provider_installation {
-            filesystem_mirror {
-              path    = "/root/.terraform.d/plugins"
-              include = ["registry.terraform.io/*/*"]
-            }
-            # БЛОКИРУЕМ любые попытки обращения к сети за провайдерами
-            direct {
-              exclude = ["registry.terraform.io/*/*"]
-            }
-          }
-          EOF
-          export TF_CLI_CONFIG_FILE=/tmp/terraform.rc
-          # Выводим для отладки
-          echo "Terraform config file created:"
-          cat /tmp/terraform.rc
-
       - name: Clean Terraform Cache
         run: |
           cd master/
