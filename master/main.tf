@@ -10,6 +10,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    external = {
+      source  = "hashicorp/external"
+      version = "~> 2.3"
+    }
   }
 }
 
@@ -36,40 +40,28 @@ resource "random_integer" "mac_part3" {
   max = 255
 }
 
-# Функция для поиска свободного VMID
-data "external" "next_vmid" {
-  program = ["bash", "-c", <<-EOT
-    base_id=4000
-    max_id=4099
-    
-    # Проверяем через qm list (проще чем pvesh)
-    for i in $(seq $base_id $max_id); do
-      if ! qm status $i 2>/dev/null; then
-        echo "{\"next_vmid\": \"$i\"}"
-        exit 0
-      fi
-    done
-    
-    # Если все заняты, берем следующий после максимального
-    last_id=$(qm list | tail -n +2 | awk '{print $1}' | sort -n | tail -1)
-    next_id=$((last_id + 1))
-    
-    # Если next_id выходит за пределы диапазона, берем случайный
-    if [ $next_id -gt $max_id ]; then
-      next_id=$(( base_id + RANDOM % (max_id - base_id + 1) ))
-    fi
-    
-    echo "{\"next_vmid\": \"$next_id\"}"
-  EOT
-]
+# Генерация случайного VMID (проще чем external data source)
+resource "random_integer" "vmid" {
+  min = 4000
+  max = 4099
+  keepers = {
+    # Изменяем при каждом запуске
+    timestamp = timestamp()
+  }
+}
+
+# Локальный провайдер для поиска свободного VMID (альтернатива)
+locals {
+  # Используем random VMID - проще и надежнее
+  vm_id = random_integer.vmid.result
 }
 
 # Основная ВМ
 resource "proxmox_vm_qemu" "k8s_master" {
-  name        = "k8s-master-${data.external.next_vmid.result.next_vmid}"
+  name        = "k8s-master-${local.vm_id}"
   target_node = var.target_node
-  vmid        = tonumber(data.external.next_vmid.result.next_vmid)
-  description = "Мастер-нода кластера Kubernetes (случайный MAC, авто-VMID)"
+  vmid        = local.vm_id
+  description = "Мастер-нода кластера Kubernetes (случайный MAC, случайный VMID)"
   start_at_node_boot = true
 
   cpu {
@@ -181,4 +173,23 @@ resource "proxmox_vm_qemu" "k8s_master" {
     # Принудительно пересоздаём при изменении VMID
     create_before_destroy = true
   }
+}
+
+# Output переменные
+output "vm_info" {
+  value = "ВМ ${proxmox_vm_qemu.k8s_master.name} (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
+}
+
+output "vm_mac" {
+  value = proxmox_vm_qemu.k8s_master.network[0].macaddr
+  description = "MAC-адрес ВМ"
+}
+
+output "vm_ip" {
+  value = proxmox_vm_qemu.k8s_master.default_ipv4_address
+  description = "IP адрес через DHCP"
+}
+
+output "ssh_command" {
+  value = "ssh -o StrictHostKeyChecking=no ubuntu@${proxmox_vm_qemu.k8s_master.default_ipv4_address}"
 }
