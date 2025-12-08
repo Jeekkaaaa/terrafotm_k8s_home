@@ -3,10 +3,23 @@ on: [push]
 
 jobs:
   terraform-deploy:
-    runs-on: [ubuntu-22.04]
+    runs-on: [ubuntu-22.04]  # Метка вашего раннера
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Configure Local Provider Cache
+        run: |
+          # КЛЮЧЕВОЙ ШАГ: Указываем Terraform использовать локальные плагины
+          cat > /tmp/terraform.rc << 'EOF'
+          provider_installation {
+            filesystem_mirror {
+              path    = "/root/.terraform.d/plugins"
+              include = ["registry.terraform.io/*/*"]
+            }
+          }
+          EOF
+          export TF_CLI_CONFIG_FILE=/tmp/terraform.rc
 
       - name: Terraform Init & Plan
         run: |
