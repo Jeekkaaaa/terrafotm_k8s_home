@@ -48,7 +48,22 @@ resource "proxmox_vm_qemu" "k8s_master" {
   sshkeys    = file(var.ssh_public_key_path)
   ipconfig0  = "ip=dhcp"
   nameserver = "8.8.8.8"
-  agent      = 0  # ВРЕМЕННО ВЫКЛЮЧАЕМ
+  agent      = 1  # ВКЛЮЧАЕМ гостевой агент!
+
+  provisioner "remote-exec" {
+    inline = ["echo 'VM is ready for SSH'"]
+    connection {
+      type        = "ssh"
+      user        = self.ciuser
+      private_key = file(var.ssh_private_key_path)
+      host        = self.default_ipv4_address  # Будет работать с агентом!
+    }
+  }
+
+  timeouts {
+    create = "10m"
+    update = "10m"
+  }
 
   lifecycle {
     ignore_changes = [
