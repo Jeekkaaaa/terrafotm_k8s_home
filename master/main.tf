@@ -18,7 +18,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
   name        = "k8s-master-01"
   target_node = var.target_node
   vmid        = 4000
-  desc        = "Первая мастер-нода кластера Kubernetes"
+  description = "Первая мастер-нода кластера Kubernetes"
   onboot      = true
 
   cores   = 4
@@ -29,10 +29,10 @@ resource "proxmox_vm_qemu" "k8s_master" {
   full_clone = true
 
   disk {
-    slot    = 0
+    slot    = "scsi0"
     size    = "50G"
     storage = "big_oleg"
-    type    = "scsi"
+    type    = "disk"
   }
 
   network {
