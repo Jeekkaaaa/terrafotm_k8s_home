@@ -4,7 +4,6 @@ terraform {
       source  = "telmate/proxmox"
       version = "3.0.2-rc06"
     }
-    # Убрали random provider
   }
 }
 
@@ -22,7 +21,7 @@ locals {
   # Берем последние цифры из timestamp для VMID
   time_seed = parseint(regex("[0-9]+", local.timestamp), 10)
   
-  # VMID в диапазоне
+  # VMID в диапазоне 4100-4199
   master_vmid = var.vmid_ranges.masters.start + (local.time_seed % 100)
   
   # Генерация MAC на основе timestamp
@@ -32,15 +31,11 @@ locals {
     substr(local.mac_seed, 2, 2),
     substr(local.mac_seed, 4, 2))
   
-  # Автоматический статический IP
-  master_ip = var.auto_static_ips ? 
-    cidrhost(var.network_config.subnet, var.static_ip_base + (local.master_vmid - var.vmid_ranges.masters.start)) : 
-    null
+  # Автоматический статический IP - ОДНА СТРОКА
+  master_ip = var.auto_static_ips ? cidrhost(var.network_config.subnet, var.static_ip_base + (local.master_vmid - var.vmid_ranges.masters.start)) : null
   
-  # IP конфигурация
-  ip_config = var.auto_static_ips ? 
-    "ip=${local.master_ip}/24,gw=${var.network_config.gateway}" : 
-    "ip=dhcp"
+  # IP конфигурация - ОДНА СТРОКА  
+  ip_config = var.auto_static_ips ? "ip=${local.master_ip}/24,gw=${var.network_config.gateway}" : "ip=dhcp"
 }
 
 # Мастер-нода
