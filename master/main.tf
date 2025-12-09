@@ -14,20 +14,15 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
-# Локальные переменные для генерации уникальных значений
+# Генерация уникальных значений
 locals {
-  # Используем хеш от timestamp для уникальности
   unique_seed = sha256(timestamp())
-  
-  # VMID: 4000-4099 на основе хеша
   vm_id = 4000 + (parseint(substr(local.unique_seed, 0, 2), 16) % 100)
   
-  # Генерация MAC на основе хеша
+  # Генерация MAC
   mac_part1 = parseint(substr(local.unique_seed, 2, 2), 16) % 256
   mac_part2 = parseint(substr(local.unique_seed, 4, 2), 16) % 256
   mac_part3 = parseint(substr(local.unique_seed, 6, 2), 16) % 256
-  
-  # Форматированный MAC
   mac_address = format("52:54:00:%02x:%02x:%02x", 
     local.mac_part1, local.mac_part2, local.mac_part3)
 }
@@ -37,7 +32,7 @@ resource "proxmox_vm_qemu" "k8s_master" {
   name        = "k8s-master-${local.vm_id}"
   target_node = var.target_node
   vmid        = local.vm_id
-  description = "Мастер-нода кластера Kubernetes (динамический MAC: ${local.mac_address})"
+  description = "Мастер-нода Kubernetes (DHCP)"
   start_at_node_boot = true
 
   cpu {
@@ -50,7 +45,6 @@ resource "proxmox_vm_qemu" "k8s_master" {
   clone      = "ubuntu-template"
   full_clone = true
 
-  # Системный диск
   disk {
     slot    = "scsi0"
     size    = "50G"
@@ -59,14 +53,12 @@ resource "proxmox_vm_qemu" "k8s_master" {
     format  = "raw"
   }
 
-  # Cloud-Init диск
   disk {
     slot    = "ide2"
     storage = "big_oleg"
     type    = "cloudinit"
   }
 
-  # Сеть с динамическим MAC-адресом
   network {
     id      = 0
     model   = "virtio"
@@ -74,40 +66,35 @@ resource "proxmox_vm_qemu" "k8s_master" {
     macaddr = local.mac_address
   }
 
-  # Cloud-Init настройки
+  # Используем DHCP
   ciuser     = "ubuntu"
   sshkeys    = file(var.ssh_public_key_path)
   ipconfig0  = "ip=dhcp"
   nameserver = "8.8.8.8"
   
-  # Агент
   agent = 1
-
-  # Контроллер SCSI
   scsihw = "virtio-scsi-pci"
 
-  # ========== ДОБАВИЛ ПЕРЕЗАГРУЗКУ ==========
-  
-  # Ожидание DHCP
-  provisioner "local-exec" {
-    command = "echo 'Ожидание получения IP через DHCP...' && sleep 30"
-  }
-
-  # ПЕРЕЗАГРУЗКА ДЛЯ НОВОГО IP
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Перезагрузка ВМ ${self.vmid} для получения нового IP..."
-      qm reboot ${self.vmid}
-      echo "Ждем перезагрузку 40 секунд..."
-      sleep 40
-    EOT
-  }
-
-  # Обновление агента через SSH (после перезагрузки)
+  # КРИТИЧЕСКИ ВАЖНО: Генерируем уникальный machine-id для DHCP
   provisioner "remote-exec" {
     inline = [
-      "echo 'ВМ перезагружена. Текущий IP: $(hostname -I)'",
-      "sudo systemctl start qemu-guest-agent 2>/dev/null || true"
+      # Удаляем старый machine-id (если есть)
+      "sudo rm -f /etc/machine-id /var/lib/dbus/machine-id",
+      
+      # Генерируем новый уникальный machine-id
+      "sudo dbus-uuidgen --ensure",
+      "sudo systemd-machine-id-setup",
+      
+      # Перезапускаем сеть с новым machine-id
+      "sudo systemctl restart systemd-networkd",
+      
+      # Ждем получения IP
+      "sleep 5",
+      
+      # Показываем новый IP
+      "echo 'Новый уникальный machine-id установлен'",
+      "echo 'Текущий IP: $(hostname -I)'",
+      "echo 'Machine ID: $(cat /etc/machine-id)'"
     ]
     
     connection {
@@ -115,32 +102,16 @@ resource "proxmox_vm_qemu" "k8s_master" {
       user        = "ubuntu"
       private_key = file(var.ssh_private_key_path)
       host        = self.default_ipv4_address
-      timeout     = "5m"
+      timeout     = "10m"
       agent       = false
     }
-    
-    on_failure = continue
-  }
-
-  timeouts {
-    create = "15m"
-    update = "15m"
   }
 
   lifecycle {
     ignore_changes = [
-      ciuser,
-      sshkeys,
-      ipconfig0,
-      nameserver,
-      agent,
-      disk[1],
       network[0].macaddr,
       vmid
     ]
-    
-    # Нужно пересоздать при изменении VMID или MAC
-    create_before_destroy = true
   }
 }
 
@@ -149,25 +120,10 @@ output "vm_info" {
   value = "ВМ ${proxmox_vm_qemu.k8s_master.name} (VMID: ${proxmox_vm_qemu.k8s_master.vmid})"
 }
 
-output "vm_mac" {
-  value = proxmox_vm_qemu.k8s_master.network[0].macaddr
-}
-
 output "vm_ip" {
   value = proxmox_vm_qemu.k8s_master.default_ipv4_address
-  description = "IP после перезагрузки"
 }
 
 output "ssh_command" {
   value = "ssh -o StrictHostKeyChecking=no ubuntu@${proxmox_vm_qemu.k8s_master.default_ipv4_address}"
-}
-
-output "verification" {
-  value = <<-EOT
-    Проверить IP после перезагрузки:
-    qm guest exec ${proxmox_vm_qemu.k8s_master.vmid} -- hostname -I
-    
-    После перезагрузки DHCP сервер (роутер) МОЖЕТ выдать новый IP,
-    если аренда короткая или роутер перезапускался.
-  EOT
 }
