@@ -4,10 +4,7 @@ terraform {
       source  = "telmate/proxmox"
       version = "3.0.2-rc06"
     }
-    random = {
-      source  = "hashicorp/random"
-      version = "~> 3.6"
-    }
+    # Убрали random provider
   }
 }
 
@@ -18,75 +15,36 @@ provider "proxmox" {
   pm_tls_insecure     = var.proxmox_config.insecure
 }
 
-# Генерация уникальных значений
-resource "random_integer" "vmid_offset" {
-  min = 0
-  max = var.vmid_ranges.masters.end - var.vmid_ranges.masters.start
-  keepers = {
-    timestamp = timestamp()
-  }
-}
-
-resource "random_integer" "mac_part1" {
-  min = 0
-  max = 255
-}
-
-resource "random_integer" "mac_part2" {
-  min = 0
-  max = 255
-}
-
-resource "random_integer" "mac_part3" {
-  min = 0
-  max = 255
-}
-
 locals {
-  # VMID
-  master_vmid = var.vmid_ranges.masters.start + random_integer.vmid_offset.result
+  # Генерация уникального VMID на основе timestamp
+  timestamp = timestamp()
   
-  # MAC
-  mac_address = format("52:54:00:%02x:%02x:%02x",
-    random_integer.mac_part1.result,
-    random_integer.mac_part2.result,
-    random_integer.mac_part3.result)
+  # Берем последние цифры из timestamp для VMID
+  time_seed = parseint(regex("[0-9]+", local.timestamp), 10)
+  
+  # VMID в диапазоне
+  master_vmid = var.vmid_ranges.masters.start + (local.time_seed % 100)
+  
+  # Генерация MAC на основе timestamp
+  mac_seed = sha256(local.timestamp)
+  mac_address = format("52:54:00:%s:%s:%s",
+    substr(local.mac_seed, 0, 2),
+    substr(local.mac_seed, 2, 2),
+    substr(local.mac_seed, 4, 2))
   
   # Автоматический статический IP
-  master_ip = var.auto_static_ips ? cidrhost(var.network_config.subnet, var.static_ip_base + (local.master_vmid - var.vmid_ranges.masters.start)) : null
+  master_ip = var.auto_static_ips ? 
+    cidrhost(var.network_config.subnet, var.static_ip_base + (local.master_vmid - var.vmid_ranges.masters.start)) : 
+    null
   
   # IP конфигурация
-  ip_config = var.auto_static_ips ? "ip=${local.master_ip}/24,gw=${var.network_config.gateway}" : "ip=dhcp"
+  ip_config = var.auto_static_ips ? 
+    "ip=${local.master_ip}/24,gw=${var.network_config.gateway}" : 
+    "ip=dhcp"
 }
-
-# ===================================================================
-# ⚠️ ВНИМАНИЕ: БЛОК УДАЛЕНИЯ СТАРЫХ ВМ
-# Раскомментируйте этот блок если хотите автоматически удалять
-# старые мастер-ноды перед созданием новой
-# ===================================================================
-# resource "null_resource" "cleanup" {
-#   triggers = {
-#     always_run = timestamp()
-#   }
-# 
-#   provisioner "local-exec" {
-#     command = <<-EOT
-#       echo "Очистка старых мастер-нод..."
-#       for vmid in $(qm list | grep "k8s-master-" | awk '{print $1}'); do
-#         echo "Удаляем ВМ $vmid"
-#         qm stop $vmid 2>/dev/null || true
-#         qm destroy $vmid --purge 2>/dev/null || true
-#       done
-#       sleep 5
-#     EOT
-#   }
-# }
-# ===================================================================
 
 # Мастер-нода
 resource "proxmox_vm_qemu" "k8s_master" {
-  # depends_on = [null_resource.cleanup]  # ⚠️ Раскомментировать вместе с блоком выше
-
   name        = "k8s-master-${local.master_vmid}"
   target_node = var.proxmox_config.node
   vmid        = local.master_vmid

@@ -1,4 +1,6 @@
-# common/variables.tf
+# common/variables.tf - ОБЩИЕ ПЕРЕМЕННЫЕ ДЛЯ ВСЕХ МОДУЛЕЙ
+
+# ==================== ПОДКЛЮЧЕНИЕ PROXMOX ====================
 variable "proxmox_config" {
   type = object({
     api_url      = string
@@ -12,6 +14,7 @@ variable "proxmox_config" {
   sensitive   = true
 }
 
+# ==================== СЕТЕВЫЕ НАСТРОЙКИ ====================
 variable "network_config" {
   type = object({
     subnet       = string
@@ -21,6 +24,7 @@ variable "network_config" {
     dhcp_start   = number
     dhcp_end     = number
   })
+  description = "Сетевые настройки"
   default = {
     subnet       = "192.168.0.0/24"
     gateway      = "192.168.0.1"
@@ -31,17 +35,32 @@ variable "network_config" {
   }
 }
 
+# ==================== ДИАПАЗОНЫ VMID ====================
 variable "vmid_ranges" {
   type = object({
-    masters = object({ start = number, end = number })
-    workers = object({ start = number, end = number })
+    masters = object({
+      start = number
+      end   = number
+    })
+    workers = object({
+      start = number
+      end   = number
+    })
   })
+  description = "Диапазоны VMID для разных типов нод"
   default = {
-    masters = { start = 4000, end = 4099 }
-    workers = { start = 4200, end = 4299 }
+    masters = {
+      start = 4000
+      end   = 4099
+    }
+    workers = {
+      start = 4200
+      end   = 4299
+    }
   }
 }
 
+# ==================== НАСТРОЙКИ КЛАСТЕРА ====================
 variable "cluster_config" {
   type = object({
     masters_count = number
@@ -49,6 +68,7 @@ variable "cluster_config" {
     cluster_name  = string
     domain        = string
   })
+  description = "Настройки кластера Kubernetes"
   default = {
     masters_count = 1
     workers_count = 2
@@ -57,16 +77,20 @@ variable "cluster_config" {
   }
 }
 
+# ==================== РЕЖИМ IP АДРЕСАЦИИ ====================
 variable "auto_static_ips" {
-  type    = bool
-  default = false
+  type        = bool
+  default     = false
+  description = "Использовать автоматические статические IP на основе VMID"
 }
 
 variable "static_ip_base" {
-  type    = number
-  default = 100
+  type        = number
+  default     = 100
+  description = "Базовый номер для статических IP (например 100 = 192.168.0.100)"
 }
 
+# ==================== ХАРДВЕРНЫЕ СПЕЦИФИКАЦИИ ====================
 variable "vm_specs" {
   type = object({
     master = object({
@@ -86,6 +110,7 @@ variable "vm_specs" {
       disk_format  = string
     })
   })
+  description = "Хардверные спецификации для ВМ"
   default = {
     master = {
       cpu_cores    = 4
@@ -106,6 +131,7 @@ variable "vm_specs" {
   }
 }
 
+# ==================== CLOUD-INIT НАСТРОЙКИ ====================
 variable "cloud_init" {
   type = object({
     user           = string
@@ -113,10 +139,39 @@ variable "cloud_init" {
     ssh_priv_path  = string
     search_domains = list(string)
   })
+  description = "Настройки Cloud-Init"
   default = {
     user           = "ubuntu"
     ssh_key_path   = "~/.ssh/id_rsa.pub"
     ssh_priv_path  = "~/.ssh/id_rsa"
     search_domains = ["local"]
   }
+}
+
+# ==================== ДОПОЛНИТЕЛЬНЫЕ НАСТРОЙКИ ====================
+variable "tags" {
+  type        = map(string)
+  description = "Теги для ресурсов"
+  default = {
+    environment = "development"
+    managed_by  = "terraform"
+    project     = "kubernetes"
+  }
+}
+
+# ==================== ЛОКАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+locals {
+  # Форматирование SSH ключа для Proxmox (заменяем пробелы на %20)
+  formatted_ssh_key = replace(
+    file(pathexpand(var.cloud_init.ssh_key_path)),
+    " ",
+    "%20"
+  )
+  
+  # Полные пути к SSH ключам
+  ssh_public_key_content  = file(pathexpand(var.cloud_init.ssh_key_path))
+  ssh_private_key_path    = pathexpand(var.cloud_init.ssh_priv_path)
+  
+  # Префикс для MAC адресов
+  mac_prefix = "52:54:00"
 }
