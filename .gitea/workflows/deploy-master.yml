@@ -12,6 +12,8 @@ jobs:
       - name: Prepare Configuration
         run: |
           echo "Копируем единый файл конфигурации в модуль master..."
+          # Ключевое изменение: копируем из текущей директории (корень репозитория)
+          # в поддиректорию master/
           cp config.auto.tfvars master/
           echo "Проверяем:"
           ls -la master/config.auto.tfvars
