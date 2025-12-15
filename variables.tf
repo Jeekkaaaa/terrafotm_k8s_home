@@ -68,9 +68,8 @@ variable "template_specs" {
     cpu_sockets  = number
     memory_mb    = number
     disk_size_gb = number
-    disk_iothread = number
-    disk_iothread = number
   })
+    disk_iothread = number
 }
 
 variable "network_config" {
