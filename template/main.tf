@@ -73,6 +73,3 @@ resource "proxmox_vm_qemu" "ubuntu_template" {
   }
 }
 
-output "template_ready" {
-  value = true
-}

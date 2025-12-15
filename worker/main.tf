@@ -14,74 +14,58 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
-# Воркер ноды
-resource "proxmox_vm_qemu" "k8s_workers" {
-  count = var.cluster_config.workers_count
-
-  name        = "k8s-worker-${var.vmid_ranges.workers.start + count.index}"
-  target_node = var.target_node
-  vmid        = var.vmid_ranges.workers.start + count.index
-  description = "Воркер-нода #${count.index + 1} кластера ${var.cluster_config.cluster_name}"
-  start_at_node_boot = true
-
-  cpu {
-    cores   = var.vm_specs.worker.cpu_cores
-    sockets = var.vm_specs.worker.cpu_sockets
-  }
-  
-  memory = var.vm_specs.worker.memory_mb
-
-  clone      = "ubuntu-template"
-  full_clone = true
-
-  disk {
-    slot    = "scsi0"
-    size    = "${var.vm_specs.worker.disk_size_gb}G"
-    storage = var.vm_specs.worker.disk_storage
-    type    = "disk"
-    format  = var.vm_specs.worker.disk_format
-  }
-
-  disk {
-    slot    = "ide2"
-    storage = var.vm_specs.worker.disk_storage
-    type    = "cloudinit"
-  }
-
-  network {
-    id      = 0
-    model   = "virtio"
-    bridge  = var.network_config.bridge
-    # Исправление: явно вычисляем MAC на основе VMID
-    macaddr = format("52:54:00:%02x:%02x:%02x",
-      floor((var.vmid_ranges.workers.start + count.index) / 65536) % 256,
-      floor((var.vmid_ranges.workers.start + count.index) / 256) % 256,
-      (var.vmid_ranges.workers.start + count.index) % 256)
-  }
-
-  ciuser     = var.cloud_init.user
-  sshkeys    = file(var.ssh_public_key_path)
-  ipconfig0  = var.auto_static_ips ? "ip=${cidrhost(var.network_config.subnet, var.static_ip_base + 10 + count.index)}/24,gw=${var.network_config.gateway}" : "ip=dhcp"
-  nameserver = join(" ", var.network_config.dns_servers)
-  
-  agent  = 1
-  scsihw = "virtio-scsi-pci"
-
-  lifecycle {
-    ignore_changes = [
-      network[0].macaddr,
-      vmid
-    ]
-  }
+locals {
+  worker_indices = range(var.cluster_config.workers_count)
 }
 
-output "workers_info" {
-  value = [
-    for idx, vm in proxmox_vm_qemu.k8s_workers : {
-      name    = vm.name
-      vmid    = vm.vmid
-      mac     = vm.network[0].macaddr
-      ip      = var.auto_static_ips ? cidrhost(var.network_config.subnet, var.static_ip_base + 10 + idx) : vm.default_ipv4_address
+resource "proxmox_vm_qemu" "k8s_worker" {
+  for_each = { for idx in local.worker_indices : idx => idx }
+
+  name        = "k8s-worker-${var.vmid_ranges.workers.start + each.key}"
+  target_node = var.target_node
+  vmid        = var.vmid_ranges.workers.start + each.key
+  description = "K8s Worker ${each.key + 1}"
+  
+  clone = "ubuntu-template"
+  full_clone = true
+  
+  cores   = var.vm_specs.worker.cpu_cores
+  sockets = var.vm_specs.worker.cpu_sockets
+  memory  = var.vm_specs.worker.memory_mb
+  onboot  = true
+  
+  disk {
+    slot    = 0
+    size    = "${var.vm_specs.worker.disk_size_gb}G"
+    storage = var.vm_specs.worker.disk_storage
+    type    = "scsi"
+  }
+  
+  network {
+    id     = 0
+    model  = "virtio"
+    bridge = var.network_config.bridge
+  }
+  
+  ciuser       = var.cloud_init.user
+  sshkeys      = file(var.ssh_public_key_path)
+  
+  # IP для воркеров начинаются после мастеров
+  ipconfig0    = var.auto_static_ips ? "ip=${cidrhost(var.network_config.subnet, var.static_ip_base + var.cluster_config.masters_count + each.key)}/24,gw=${var.network_config.gateway}" : "ip=dhcp"
+  
+  nameserver   = join(" ", var.network_config.dns_servers)
+  searchdomain = join(" ", var.cloud_init.search_domains)
+  
+  agent  = 1
+  scsihw = "virtio-scsi-single"
+}
+
+output "workers" {
+  value = {
+    for idx, vm in proxmox_vm_qemu.k8s_worker : idx => {
+      name = vm.name
+      vmid = vm.vmid
+      ip   = var.auto_static_ips ? cidrhost(var.network_config.subnet, var.static_ip_base + var.cluster_config.masters_count + idx) : "dhcp"
     }
-  ]
+  }
 }

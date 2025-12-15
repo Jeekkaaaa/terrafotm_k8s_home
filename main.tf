@@ -26,12 +26,14 @@ module "template" {
   pm_api_token_secret = var.pm_api_token_secret
   target_node         = var.target_node
   ssh_public_key      = file(var.ssh_public_key_path)
+  template_vmid       = var.template_vmid
+  storage             = var.storage
+  bridge              = var.bridge
 }
 
 # Модуль мастер-нод
 module "master" {
   source = "./master"
-  depends_on = [module.template]
   
   pm_api_url          = var.pm_api_url
   pm_api_token_id     = var.pm_api_token_id
@@ -49,10 +51,9 @@ module "master" {
   static_ip_base      = var.static_ip_base
 }
 
-# Модуль воркер-нод (пока отключен - workers_count = 0)
+# Модуль воркер-нод
 module "worker" {
   source = "./worker"
-  depends_on = [module.template]
   
   pm_api_url          = var.pm_api_url
   pm_api_token_id     = var.pm_api_token_id
@@ -76,4 +77,8 @@ output "template_info" {
 
 output "masters_info" {
   value = module.master.masters
+}
+
+output "workers_info" {
+  value = module.worker.workers
 }
