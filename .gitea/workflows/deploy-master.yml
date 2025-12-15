@@ -10,9 +10,17 @@ jobs:
 
       - name: Generate SSH Key
         run: |
+          echo "=== Генерация нового SSH ключа ==="
           mkdir -p /root/.ssh
-          ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q
-          echo "=== SSH Public Key ==="
+          # Удаляем старые ключи если существуют
+          if [ -f /root/.ssh/id_ed25519 ]; then
+            echo "Удаляем существующий SSH ключ..."
+            rm -f /root/.ssh/id_ed25519 /root/.ssh/id_ed25519.pub
+          fi
+          # Генерируем новый ключ БЕЗ вопросов
+          ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q <<< y 2>&1
+          echo "✅ SSH ключ сгенерирован"
+          echo "=== Публичный ключ ==="
           cat /root/.ssh/id_ed25519.pub
 
       - name: Check IP Range Availability
@@ -24,7 +32,7 @@ jobs:
             exit 1
           fi
           
-          # Чтение переменных БЕЗ сложных кавычек
+          # Чтение переменных
           SUBNET=$(grep 'subnet' config.auto.tfvars | cut -d'"' -f2)
           STATIC_BASE=$(grep 'static_ip_base' config.auto.tfvars | awk '{print $3}')
           MASTERS_COUNT=$(grep 'masters_count' config.auto.tfvars | awk '{print $3}')
@@ -36,8 +44,7 @@ jobs:
           echo "Воркер-нод: $WORKERS_COUNT"
           
           if [ -z "$SUBNET" ] || [ -z "$STATIC_BASE" ] || [ -z "$MASTERS_COUNT" ] || [ -z "$WORKERS_COUNT" ]; then
-            echo "❌ Не удалось прочитать настройки из config.auto.tfvars"
-            echo "Проверьте формат файла!"
+            echo "❌ Не удалось прочитать настройки"
             exit 1
           fi
           
@@ -69,10 +76,7 @@ jobs:
           fi
 
       - name: Clean Terraform Cache
-        run: |
-          echo "=== Очистка Terraform кэша ==="
-          rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
-          echo "Кэш очищен"
+        run: rm -rf .terraform .terraform.lock.hcl
 
       - name: Terraform Init
         run: terraform init
