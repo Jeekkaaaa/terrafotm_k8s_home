@@ -17,85 +17,70 @@ jobs:
           echo "=== SSH Public Key ==="
           cat /root/.ssh/id_ed25519.pub
 
-      - name: Auto-find IP Range
+      - name: Check IP Range Availability
         run: |
-          echo "=== Автоматический подбор IP диапазона ==="
+          echo "=== Проверка диапазона IP адресов ==="
           
-          # Читаем настройки
-          SUBNET=$(grep 'subnet' config.auto.tfvars | sed -n 's/.*"\([^"]*\)".*/\1/p')
-          CURRENT_BASE=$(grep 'static_ip_base' config.auto.tfvars | awk '{print $3}')
-          MASTERS=$(grep -A2 'masters_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1)
-          WORKERS=$(grep -A2 'workers_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1)
-          TOTAL=$((MASTERS + WORKERS))
-          
-          NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3}')
-          
-          echo "Ищем диапазон для $TOTAL нод ($MASTERS мастер + $WORKERS воркер)"
-          echo "Текущая база: $CURRENT_BASE"
-          
-          # Сначала проверяем текущий диапазон
-          CURRENT_FREE=true
-          for i in $(seq 0 $((TOTAL - 1))); do
-            IP="$NETWORK_PREFIX.$((CURRENT_BASE + i))"
-            if ping -c 1 -W 1 "$IP" &>/dev/null; then
-              echo "❌ $IP занят"
-              CURRENT_FREE=false
-            fi
-          done
-          
-          if [ "$CURRENT_FREE" = true ]; then
-            echo "✅ Текущий диапазон свободен"
-            exit 0
+          if [ ! -f config.auto.tfvars ]; then
+            echo "❌ Файл config.auto.tfvars не найден!"
+            exit 1
           fi
           
-          echo "Текущий диапазон занят, ищем новый..."
+          SUBNET=$(grep 'subnet' config.auto.tfvars | sed -n 's/.*"\([^"]*\)".*/\1/p')
+          STATIC_BASE=$(grep 'static_ip_base' config.auto.tfvars | awk '{print $3}')
+          MASTERS_COUNT=$(grep -A2 'masters_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1)
+          WORKERS_COUNT=$(grep -A2 'workers_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1')
           
-          # Ищем свободный диапазон (от 100 до 240)
-          for start in $(seq 100 240); do
-            RANGE_FREE=true
+          echo "Сеть: $SUBNET"
+          echo "Базовый IP: $STATIC_BASE"
+          echo "Мастер-нод: $MASTERS_COUNT"
+          echo "Воркер-нод: $WORKERS_COUNT"
+          
+          if [ -z "$SUBNET" ] || [ -z "$STATIC_BASE" ]; then
+            echo "❌ Не удалось прочитать настройки"
+            exit 1
+          fi
+          
+          NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3}')
+          TOTAL_NODES=$((MASTERS_COUNT + WORKERS_COUNT))
+          
+          echo "=== Проверка $TOTAL_NODES IP адресов ==="
+          
+          ALL_FREE=true
+          for i in $(seq 0 $((TOTAL_NODES - 1))); do
+            IP_INDEX=$((STATIC_BASE + i))
+            CHECK_IP="${NETWORK_PREFIX}.${IP_INDEX}"
             
-            for offset in $(seq 0 $((TOTAL - 1))); do
-              IP="$NETWORK_PREFIX.$((start + offset))"
-              if ping -c 1 -W 1 "$IP" &>/dev/null; then
-                RANGE_FREE=false
-                break
-              fi
-            done
-            
-            if [ "$RANGE_FREE" = true ]; then
-              echo "✅ Найден свободный диапазон: $start"
-              
-              # Обновляем config.auto.tfvars
-              sed -i "s/static_ip_base  = $CURRENT_BASE/static_ip_base  = $start/" config.auto.tfvars
-              
-              echo "Обновлен static_ip_base на $start"
-              echo "Новые IP:"
-              for offset in $(seq 0 $((TOTAL - 1))); do
-                ip=$((start + offset))
-                if [ $offset -lt $MASTERS ]; then
-                  echo "  Мастер $((offset+1)): $NETWORK_PREFIX.$ip"
-                else
-                  echo "  Воркер $((offset - MASTERS + 1)): $NETWORK_PREFIX.$ip"
-                fi
-              done
-              
-              # Показываем изменения
-              echo "=== Изменения в config.auto.tfvars ==="
-              grep "static_ip_base" config.auto.tfvars
-              exit 0
+            echo -n "  $CHECK_IP ... "
+            if ping -c 1 -W 1 "$CHECK_IP" >/dev/null 2>&1; then
+              echo "ЗАНЯТ ❌"
+              ALL_FREE=false
+            else
+              echo "свободен ✅"
             fi
           done
           
-          echo "❌ Не удалось найти свободный диапазон"
-          exit 1
+          if [ "$ALL_FREE" = false ]; then
+            echo "❌ Некоторые IP адреса уже заняты!"
+            echo "Измените static_ip_base в config.auto.tfvars"
+            exit 1
+          else
+            echo "✅ Все IP адреса свободны"
+          fi
 
-      - name: Show Final Configuration
+      - name: Clean Terraform Cache
         run: |
-          echo "=== Финальная конфигурация ==="
-          cat config.auto.tfvars
+          echo "=== Очистка Terraform кэша ==="
+          rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
+          echo "Кэш очищен"
+
+      - name: Show Configuration
+        run: |
+          echo "=== Config.auto.tfvars ==="
+          cat config.auto.tfvars | head -30
           echo ""
-          echo "=== IP адреса ==="
-          grep "static_ip_base" config.auto.tfvars
+          echo "=== Variables.tf ==="
+          cat variables.tf | grep "variable \"" | head -20
 
       - name: Terraform Init
         run: terraform init
