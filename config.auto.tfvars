@@ -20,7 +20,7 @@ vm_specs = {
     cpu_sockets  = 1
     memory_mb    = 8192
     disk_size_gb = 50
-    disk_storage = "big_oleg"  # Ваше хранилище для мастер-нод
+    disk_storage = "local-lvm"  # Ваше хранилище для мастер-нод
     disk_format  = "raw"
   }
   worker = {
@@ -28,7 +28,7 @@ vm_specs = {
     cpu_sockets  = 1
     memory_mb    = 4096
     disk_size_gb = 30
-    disk_storage = "big_oleg"  # Ваше хранилище для воркер-нод
+    disk_storage = "local-lvm"  # Ваше хранилище для воркер-нод
     disk_format  = "raw"
   }
 }
@@ -49,7 +49,7 @@ auto_static_ips = true
 static_ip_base  = 110
 
 # Целевая нода Proxmox
-target_node = "pve"
+target_node = "pve-k8s"
 
 # Настройки Cloud-Init
 cloud_init = {
