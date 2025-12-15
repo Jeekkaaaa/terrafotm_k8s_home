@@ -1,4 +1,4 @@
-name: Full K8s Deployment with Template
+name: Deploy K8s Cluster
 on: [push]
 
 jobs:
@@ -11,9 +11,7 @@ jobs:
       - name: Generate SSH Key
         run: |
           mkdir -p /root/.ssh
-          if [ ! -f /root/.ssh/id_ed25519 ]; then
-            ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q
-          fi
+          ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q
           echo "=== SSH Public Key ==="
           cat /root/.ssh/id_ed25519.pub
 
@@ -26,25 +24,27 @@ jobs:
             exit 1
           fi
           
-          SUBNET=$(grep 'subnet' config.auto.tfvars | sed -n 's/.*"\([^"]*\)".*/\1/p')
+          # Чтение переменных БЕЗ сложных кавычек
+          SUBNET=$(grep 'subnet' config.auto.tfvars | cut -d'"' -f2)
           STATIC_BASE=$(grep 'static_ip_base' config.auto.tfvars | awk '{print $3}')
-          MASTERS_COUNT=$(grep -A2 'masters_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1)
-          WORKERS_COUNT=$(grep -A2 'workers_count' config.auto.tfvars | grep -o '[0-9]\+' | head -1')
+          MASTERS_COUNT=$(grep 'masters_count' config.auto.tfvars | awk '{print $3}')
+          WORKERS_COUNT=$(grep 'workers_count' config.auto.tfvars | awk '{print $3}')
           
           echo "Сеть: $SUBNET"
           echo "Базовый IP: $STATIC_BASE"
           echo "Мастер-нод: $MASTERS_COUNT"
           echo "Воркер-нод: $WORKERS_COUNT"
           
-          if [ -z "$SUBNET" ] || [ -z "$STATIC_BASE" ]; then
-            echo "❌ Не удалось прочитать настройки"
+          if [ -z "$SUBNET" ] || [ -z "$STATIC_BASE" ] || [ -z "$MASTERS_COUNT" ] || [ -z "$WORKERS_COUNT" ]; then
+            echo "❌ Не удалось прочитать настройки из config.auto.tfvars"
+            echo "Проверьте формат файла!"
             exit 1
           fi
           
-          NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | awk -F. '{print $1"."$2"."$3}')
+          NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | cut -d. -f1-3)
           TOTAL_NODES=$((MASTERS_COUNT + WORKERS_COUNT))
           
-          echo "=== Проверка $TOTAL_NODES IP адресов ==="
+          echo "=== Проверка $TOTAL_NODES IP адресов ($NETWORK_PREFIX.$STATIC_BASE-$((STATIC_BASE + TOTAL_NODES - 1))) ==="
           
           ALL_FREE=true
           for i in $(seq 0 $((TOTAL_NODES - 1))); do
@@ -73,14 +73,6 @@ jobs:
           echo "=== Очистка Terraform кэша ==="
           rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
           echo "Кэш очищен"
-
-      - name: Show Configuration
-        run: |
-          echo "=== Config.auto.tfvars ==="
-          cat config.auto.tfvars | head -30
-          echo ""
-          echo "=== Variables.tf ==="
-          cat variables.tf | grep "variable \"" | head -20
 
       - name: Terraform Init
         run: terraform init
