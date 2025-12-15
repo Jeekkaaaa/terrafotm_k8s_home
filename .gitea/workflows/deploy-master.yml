@@ -10,15 +10,18 @@ jobs:
 
       # Копируем ЕДИНЫЙ файл конфигурации туда, где его увидит Terraform
       - name: Prepare Configuration
+        working-directory: .  # ВСЕ команды ниже выполняются из корня репозитория
         run: |
-          echo "Копируем единый файл конфигурации в модуль master..."
-          # Ключевое изменение: копируем из текущей директории (корень репозитория)
-          # в поддиректорию master/
+          echo "=== Текущая директория (должна быть корень репозитория) ==="
+          pwd
+          echo "=== Содержимое корня ==="
+          ls -la
+          echo "=== Копируем config.auto.tfvars в master/ ==="
           cp config.auto.tfvars master/
-          echo "Проверяем:"
+          echo "=== Проверяем копирование ==="
           ls -la master/config.auto.tfvars
-          echo "--- Содержимое (первые 5 строк) ---"
-          head -5 master/config.auto.tfvars
+          echo "--- Проверяем ключевое значение target_node в файле ---"
+          grep target_node master/config.auto.tfvars
 
       - name: Generate SSH Key
         run: |
