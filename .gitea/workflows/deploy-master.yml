@@ -17,6 +17,13 @@ jobs:
           echo "SSH_PUB_KEY=$SSH_PUB" >> $GITHUB_ENV
           echo "✅ SSH ключ сгенерирован"
 
+      - name: Copy config to all directories
+        run: |
+          echo "=== Копируем config.auto.tfvars ==="
+          cp config.auto.tfvars template/
+          cp config.auto.tfvars master/
+          cp config.auto.tfvars worker/
+
       - name: Auto-find Free IP Range
         run: |
           echo "=== Автопоиск свободных IP ==="
@@ -51,8 +58,15 @@ jobs:
             
             if [ "$FREE" = true ]; then
               echo "✅ Найден свободный диапазон: $start"
-              sed -i "s/static_ip_base = $CURRENT_BASE/static_ip_base = $start/" "$CONFIG"
-              sed -i "s|ssh_public_key = \"\"|ssh_public_key = \"$SSH_PUB_KEY\"|" "$CONFIG"
+              
+              # Обновляем ВСЕ файлы
+              for file in config.auto.tfvars template/config.auto.tfvars master/config.auto.tfvars worker/config.auto.tfvars; do
+                if [ -f "$file" ]; then
+                  sed -i "s/static_ip_base = $CURRENT_BASE/static_ip_base = $start/" "$file"
+                  sed -i "s|ssh_public_key = \"\"|ssh_public_key = \"$SSH_PUB_KEY\"|" "$file"
+                fi
+              done
+              
               echo "Обновлено: static_ip_base = $start"
               echo "IP адреса:"
               for i in $(seq 0 $((TOTAL - 1))); do
@@ -66,21 +80,19 @@ jobs:
           exit 1
 
       - name: Clean Terraform Cache
-        run: rm -rf .terraform .terraform.lock.hcl
-
-      - name: Terraform Init & Plan & Apply
         run: |
-          # Копируем config.auto.tfvars в каждую папку
-          cp config.auto.tfvars template/
-          cp config.auto.tfvars master/
-          cp config.auto.tfvars worker/
-          
-          # Запускаем для каждой папки
+          echo "=== Очистка кэша ==="
+          for dir in template master worker; do
+            [ -d "$dir" ] && cd "$dir" && rm -rf .terraform .terraform.lock.hcl 2>/dev/null || true
+            cd ..
+          done
+
+      - name: Terraform Apply All
+        run: |
           for dir in template master worker; do
             echo "=== Работаем в $dir/ ==="
             cd "$dir"
             terraform init
-            terraform plan -input=false
             terraform apply -auto-approve -input=false
             cd ..
           done
