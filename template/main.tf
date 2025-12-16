@@ -29,15 +29,15 @@ resource "proxmox_vm_qemu" "ubuntu_template" {
   start_at_node_boot = false
   
   disk {
-    slot     = 0
-    type     = "scsi"
+    slot     = "scsi0"
+    type     = "disk"
     storage  = var.storage
     size     = "${var.template_specs.disk_size_gb}G"
     iothread = var.template_specs.disk_iothread
   }
   
   disk {
-    slot    = 2
+    slot    = "scsi2"
     type    = "cloudinit"
     storage = var.storage
   }
