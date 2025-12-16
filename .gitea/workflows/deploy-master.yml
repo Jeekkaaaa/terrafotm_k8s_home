@@ -75,10 +75,13 @@ jobs:
           echo "=== Создаем шаблон Ubuntu ==="
           cd template
           terraform init
-          # Используем config из корня!
           terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
           cd ..
           sleep 15
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
 
       - name: Deploy Master and Workers
         run: |
@@ -88,7 +91,6 @@ jobs:
             echo "--- $dir ---"
             cd "$dir"
             terraform init
-            # Используем config из корня!
             terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
             cd ..
           done
