@@ -62,28 +62,39 @@ jobs:
           echo "❌ Не найдено $NEEDED_IPS свободных IP подряд"
           exit 1
 
-      - name: Update config files
+      - name: Update main config file
         run: |
-          echo "=== Обновляем конфиги ==="
+          echo "=== Обновляем основной config.auto.tfvars ==="
           
-          # Обновляем основной config
-          sed -i "s/static_ip_base = 100/static_ip_base = $STATIC_IP_BASE/" config.auto.tfvars
-          sed -i "s|ssh_public_key = \"\"|ssh_public_key = \"$SSH_PUB_KEY\"|" config.auto.tfvars
+          # 1. Обновляем static_ip_base
+          sed -i "s/static_ip_base = .*/static_ip_base = $STATIC_IP_BASE/" config.auto.tfvars
           
-          # Копируем в поддиректории
+          # 2. Обновляем ssh_public_key
+          sed -i "s|ssh_public_key = \".*\"|ssh_public_key = \"$SSH_PUB_KEY\"|" config.auto.tfvars
+          
+          echo "Обновлено: static_ip_base = $STATIC_IP_BASE"
+          echo "Обновлено: ssh_public_key"
+
+      - name: Copy updated config to modules
+        run: |
+          echo "=== Копируем ОБНОВЛЕННЫЙ config в модули ==="
+          
+          # Копируем ТОЛЬКО после обновления!
           cp config.auto.tfvars template/
           cp config.auto.tfvars master/
           cp config.auto.tfvars worker/
+          
+          echo "✅ Config скопирован во все модули"
 
       - name: Create Template
         run: |
           echo "=== Создаем шаблон Ubuntu ==="
           cd template
           terraform init
-          terraform apply -auto-approve -input=false
+          terraform apply -auto-approve -input=false -var-file="./config.auto.tfvars"
           cd ..
-          echo "✅ Шаблон создан, ждем 30 секунд..."
-          sleep 30
+          echo "✅ Шаблон создан, ждем 15 секунд..."
+          sleep 15
 
       - name: Deploy Master and Workers
         run: |
@@ -93,7 +104,7 @@ jobs:
             echo "--- $dir ---"
             cd "$dir"
             terraform init
-            terraform apply -auto-approve -input=false
+            terraform apply -auto-approve -input=false -var-file="./config.auto.tfvars"
             cd ..
           done
         env:
