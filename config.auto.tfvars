@@ -70,3 +70,7 @@ template_specs = {
   disk_size_gb  = 12
   disk_iothread = true
 }
+
+# Хранилища
+storage_iso = "local"  # Для образов ISO (Directory storage)
+storage_vm  = "local-lvm"  # Для дисков ВМ (LVM storage)

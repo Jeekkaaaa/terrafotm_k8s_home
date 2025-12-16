@@ -13,19 +13,24 @@ provider "proxmox" {
   insecure  = true
 }
 
-# 1. АВТОМАТИЧЕСКАЯ ЗАГРУЗКА ОБРАЗА UBUNTU
+# Загрузка образа в хранилище для ISO (local)
 resource "proxmox_virtual_environment_file" "ubuntu_cloud_image" {
   content_type = "iso"
-  datastore_id = var.storage
+  datastore_id = var.storage_iso
   node_name    = var.target_node
-
+  overwrite    = true
+  timeout_upload = 3600
+  
   source_file {
-    path = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+    path     = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+    insecure = true
   }
 }
 
-# 2. СОЗДАНИЕ ШАБЛОНА ИЗ ОБРАЗА
+# Создание шаблона
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
+  depends_on = [proxmox_virtual_environment_file.ubuntu_cloud_image]
+  
   name      = "ubuntu-template"
   node_name = var.target_node
   vm_id     = var.template_vmid
@@ -39,18 +44,18 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     dedicated = var.template_specs.memory_mb
   }
   
-  # Диск из загруженного образа
+  # Диск ВМ в storage_vm (local-lvm)
   disk {
-    datastore_id = var.storage
-    file_id      = "${var.target_node}/${var.storage}:iso/${proxmox_virtual_environment_file.ubuntu_cloud_image.file_name}"
+    datastore_id = var.storage_vm
+    file_id      = "${var.target_node}/${var.storage_iso}:iso/${proxmox_virtual_environment_file.ubuntu_cloud_image.file_name}"
     size         = var.template_specs.disk_size_gb
     iothread     = var.template_specs.disk_iothread
     interface    = "scsi0"
   }
   
-  # Cloud-init диск
+  # Cloud-init диск тоже в storage_vm
   initialization {
-    datastore_id = var.storage
+    datastore_id = var.storage_vm
     
     user_account {
       username = var.cloud_init.user
@@ -69,19 +74,16 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     }
   }
   
-  # Сеть
   network_device {
     bridge = var.network_config.bridge
     model  = "virtio"
   }
   
-  # Агент
   agent {
     enabled = true
     type    = "virtio"
   }
   
-  # Сразу создаем как шаблон
   template = true
   
   lifecycle {
@@ -93,5 +95,5 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
 }
 
 output "template_ready" {
-  value = "Template ${var.template_vmid} created from cloud image"
+  value = "Template ${var.template_vmid} created"
 }

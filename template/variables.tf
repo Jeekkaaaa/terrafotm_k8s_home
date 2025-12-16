@@ -109,3 +109,11 @@ variable "cloud_init" {
 variable "static_ip_base" {
   type = number
 }
+
+variable "storage_iso" {
+  type = string
+}
+
+variable "storage_vm" {
+  type = string
+}
