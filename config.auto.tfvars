@@ -74,3 +74,7 @@ template_specs = {
 # Хранилища
 storage_iso = "local"  # Для образов ISO (Directory storage)
 storage_vm  = "local-lvm"  # Для дисков ВМ (LVM storage)
+
+# Хранилища
+storage_iso = "local"      # Для образов ISO (тип Directory)
+storage_vm  = "local-lvm"  # Для дисков ВМ (тип LVM)

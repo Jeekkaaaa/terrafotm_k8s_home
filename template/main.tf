@@ -19,7 +19,7 @@ resource "proxmox_virtual_environment_file" "ubuntu_cloud_image" {
   datastore_id = var.storage_iso
   node_name    = var.target_node
   overwrite    = true
-  timeout_upload = 3600
+  timeout_upload = 7200
   
   source_file {
     path     = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
