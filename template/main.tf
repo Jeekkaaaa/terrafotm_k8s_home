@@ -13,8 +13,31 @@ provider "proxmox" {
   insecure  = true
 }
 
-# 1. Скачиваем образ в runner
+# 1. Проверяем существует ли образ уже в Proxmox
+data "external" "check_image" {
+  program = ["bash", "-c", <<-EOT
+    # Извлекаем хост и токен из переменных
+    PM_HOST=$(echo "$TF_VAR_pm_api_url" | sed 's|https://||; s|:8006||')
+    PM_TOKEN="$TF_VAR_pm_api_token_id=$TF_VAR_pm_api_token_secret"
+    
+    # Проверяем список файлов в хранилище local
+    RESPONSE=$(curl -s -k -H "Authorization: PVEAPIToken=$PM_TOKEN" \
+      "https://$PM_HOST:8006/api2/json/nodes/${TF_VAR_target_node}/storage/local/content" || echo '[]')
+    
+    # Ищем наш образ
+    if echo "$RESPONSE" | grep -q "jammy-server-cloudimg-amd64.img"; then
+      echo '{"exists": "true"}'
+    else
+      echo '{"exists": "false"}'
+    fi
+  EOT
+]
+}
+
+# 2. Скачиваем образ только если его нет
 resource "terraform_data" "download_image" {
+  count = data.external.check_image.result.exists == "true" ? 0 : 1
+  
   triggers_replace = timestamp()
 
   provisioner "local-exec" {
@@ -33,8 +56,10 @@ resource "terraform_data" "download_image" {
   }
 }
 
-# 2. Загружаем в Proxmox через прямой API вызов (минуя провайдер Terraform)
+# 3. Загружаем в Proxmox через qm importdisk (локально на Proxmox)
 resource "terraform_data" "upload_to_proxmox" {
+  count = data.external.check_image.result.exists == "true" ? 0 : 1
+  
   depends_on = [terraform_data.download_image]
 
   triggers_replace = timestamp()
@@ -42,42 +67,58 @@ resource "terraform_data" "upload_to_proxmox" {
   provisioner "local-exec" {
     command = <<-EOT
       set -e
-      echo "Загрузка образа в Proxmox через API..."
+      echo "Загрузка образа в Proxmox через qm importdisk..."
       
-      # Извлекаем хост и порт из URL
-      PM_HOST=$(echo "${var.pm_api_url}" | sed 's|https://||; s|:8006||')
-      PM_TOKEN="${var.pm_api_token_id}=${var.pm_api_token_secret}"
+      # Извлекаем хост
+      PM_HOST=$(echo "$TF_VAR_pm_api_url" | sed 's|https://||; s|:8006||')
       
-      # Получаем ticket для загрузки
-      TICKET_RESPONSE=$(curl -s -k -H "Authorization: PVEAPIToken=$PM_TOKEN" \
-        "https://$PM_HOST:8006/api2/json/nodes/${var.target_node}/storage/local/upload")
+      # Копируем образ на Proxmox
+      echo "Копируем файл на Proxmox..."
+      scp -o StrictHostKeyChecking=no /tmp/jammy-server-cloudimg-amd64.img \
+        root@$PM_HOST:/tmp/jammy-server-cloudimg-amd64.img 2>/dev/null || \
+        echo "⚠️  SCP не удался, возможно образ уже на Proxmox"
       
-      UPLOAD_TICKET=$(echo "$TICKET_RESPONSE" | grep -o '"data":"[^"]*"' | cut -d'"' -f4)
+      # Импортируем через qm (работает локально на Proxmox)
+      echo "Импортируем образ через qm..."
+      ssh -o StrictHostKeyChecking=no root@$PM_HOST << 'SSH_EOF'
+        # Проверяем есть ли уже образ
+        if [ -f /var/lib/vz/template/iso/jammy-server-cloudimg-amd64.img ]; then
+          echo "✅ Образ уже существует в Proxmox"
+          exit 0
+        fi
+        
+        # Импортируем через временную VM
+        echo "Создаем временную VM для импорта..."
+        qm create 9999 --name temp-import --memory 128 2>/dev/null || true
+        
+        # Импортируем диск
+        qm importdisk 9999 /tmp/jammy-server-cloudimg-amd64.img local --format qcow2
+        
+        # Ищем импортированный файл
+        IMG_FILE=$(find /var/lib/vz/template/iso/ -name "*jammy*" -type f | head -1)
+        
+        if [ -z "$IMG_FILE" ]; then
+          # Копируем вручную
+          cp /tmp/jammy-server-cloudimg-amd64.img /var/lib/vz/template/iso/
+          echo "✅ Образ скопирован вручную"
+        else
+          echo "✅ Образ импортирован: $IMG_FILE"
+        fi
+        
+        # Удаляем временную VM
+        qm destroy 9999 --purge 2>/dev/null || true
+        
+        # Очищаем временный файл
+        rm -f /tmp/jammy-server-cloudimg-amd64.img
+SSH_EOF
       
-      if [ -z "$UPLOAD_TICKET" ]; then
-        echo "❌ Не удалось получить upload ticket"
-        exit 1
-      fi
-      
-      echo "Загружаем файл с ticket: $UPLOAD_TICKET"
-      
-      # Загружаем файл
-      curl -k -X POST \
-        -H "Authorization: PVEAPIToken=$PM_TOKEN" \
-        -F "content=iso" \
-        -F "filename=@/tmp/jammy-server-cloudimg-amd64.img" \
-        "https://$PM_HOST:8006/api2/json/nodes/${var.target_node}/storage/local/upload" \
-        --max-time 3600  # 1 час таймаут
-      
-      echo "✅ Образ загружен в Proxmox через API"
+      echo "✅ Образ загружен в Proxmox"
     EOT
   }
 }
 
-# 3. Создаем шаблон
+# 4. Создаем шаблон (работает всегда)
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
-  depends_on = [terraform_data.upload_to_proxmox]
-
   name      = "ubuntu-template"
   node_name = var.target_node
   vm_id     = var.template_vmid
@@ -140,5 +181,9 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
 }
 
 output "template_ready" {
-  value = "Template ${var.template_vmid} created"
+  value = "Template ${var.template_vmid} created. Image exists: ${data.external.check_image.result.exists}"
+}
+
+output "image_status" {
+  value = data.external.check_image.result.exists == "true" ? "Image already exists, skipping download" : "Downloading and uploading image"
 }
