@@ -14,9 +14,7 @@ provider "proxmox" {
   
   # ЯВНО ОТКЛЮЧАЕМ SSH ДЛЯ ИЗБЕЖАНИЯ ОШИБОК АУТЕНТИФИКАЦИИ
   ssh {
-    agent    = false
-    username = ""
-    password = ""
+    agent = false
   }
 }
 
