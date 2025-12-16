@@ -8,91 +8,78 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Parse network configuration
+      - name: Read network config
         run: |
-          echo "=== Парсим конфигурацию сети ==="
+          echo "=== Читаем конфигурацию сети ==="
           CONFIG="config.auto.tfvars"
           
-          SUBNET=$(grep 'subnet' "$CONFIG" | cut -d'"' -f2)
-          GATEWAY=$(grep 'gateway' "$CONFIG" | cut -d'"' -f2)
+          # Извлекаем subnet из config
+          SUBNET_LINE=$(grep 'subnet' "$CONFIG")
+          SUBNET=$(echo "$SUBNET_LINE" | grep -o '"[^"]*"' | head -1 | tr -d '"')
           
-          if [ -z "$SUBNET" ] || [ -z "$GATEWAY" ]; then
-            echo "❌ Не удалось прочитать network_config"
+          if [ -z "$SUBNET" ]; then
+            echo "❌ Не найден subnet в config"
             exit 1
           fi
           
           NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | cut -d. -f1-3)
-          
-          echo "Сеть: $SUBNET"
-          echo "Префикс: $NETWORK_PREFIX"
-          
+          echo "Network prefix: $NETWORK_PREFIX"
           echo "NETWORK_PREFIX=$NETWORK_PREFIX" >> $GITHUB_ENV
-          echo "GATEWAY=$GATEWAY" >> $GITHUB_ENV
 
       - name: Generate SSH Key
         run: |
           mkdir -p /root/.ssh
-          rm -f /root/.ssh/id_ed25519 /root/.ssh/id_ed25519.pub
           ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q <<< y 2>&1
           SSH_PUB=$(cat /root/.ssh/id_ed25519.pub)
           echo "SSH_PUB_KEY=$SSH_PUB" >> $GITHUB_ENV
 
       - name: Auto-find Free IP Range
         run: |
-          echo "=== Автопоиск свободных IP ==="
+          echo "=== Ищем свободные IP в $NETWORK_PREFIX.XXX ==="
           
-          MASTERS=1
-          WORKERS=2
-          TOTAL=$((MASTERS + WORKERS))
-          
-          echo "Ищем $TOTAL свободных IP..."
+          NEEDED_IPS=3  # 1 master + 2 workers
           
           for start in $(seq 100 240); do
             FREE=true
-            for i in $(seq 0 $((TOTAL - 1))); do
+            for i in $(seq 0 $((NEEDED_IPS - 1))); do
               IP="$NETWORK_PREFIX.$((start + i))"
               if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
-                echo "  $IP занят"
                 FREE=false
                 break
               fi
             done
             
             if [ "$FREE" = true ]; then
-              echo "✅ Найден свободный диапазон: $start"
-              echo "IP адреса:"
-              for i in $(seq 0 $((TOTAL - 1))); do
-                IP_CALC=$((start + i))
-                echo "  $NETWORK_PREFIX.$IP_CALC"
-              done
-              
+              echo "✅ Найден свободный диапазон с $start"
+              echo "Master: $NETWORK_PREFIX.$start"
+              echo "Worker1: $NETWORK_PREFIX.$((start + 1))"
+              echo "Worker2: $NETWORK_PREFIX.$((start + 2))"
               echo "STATIC_IP_BASE=$start" >> $GITHUB_ENV
               exit 0
             fi
           done
           
-          echo "❌ Свободный диапазон не найден"
+          echo "❌ Не найдено $NEEDED_IPS свободных IP подряд"
           exit 1
 
-      - name: Update configs with IP and SSH
+      - name: Update config files
         run: |
           echo "=== Обновляем конфиги ==="
           
-          # Добавляем static_ip_base в config.auto.tfvars
-          echo "static_ip_base = $STATIC_IP_BASE" >> config.auto.tfvars
-          echo "ssh_public_key = \"$SSH_PUB_KEY\"" >> config.auto.tfvars
+          # Обновляем основной config
+          sed -i "s/static_ip_base = 100/static_ip_base = $STATIC_IP_BASE/" config.auto.tfvars
+          sed -i "s|ssh_public_key = \"\"|ssh_public_key = \"$SSH_PUB_KEY\"|" config.auto.tfvars
           
-          # Копируем обновленный конфиг
+          # Копируем в поддиректории
           cp config.auto.tfvars master/
           cp config.auto.tfvars worker/
 
-      - name: Terraform Apply (only master and worker)
+      - name: Terraform Init & Apply
         run: |
-          # ПРЕДПОЛОЖЕНИЕ: шаблон уже создан вручную в Proxmox
-          echo "=== Создаем master и worker ноды ==="
+          echo "=== Создаем Master и Worker ноды ==="
           
           for dir in master worker; do
-            echo "=== Работаем в $dir/ ==="
+            echo "--- $dir ---"
             cd "$dir"
             terraform init
             terraform apply -auto-approve -input=false

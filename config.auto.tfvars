@@ -1,4 +1,4 @@
-# Proxmox API (через secrets)
+# Proxmox API (заполнится через secrets)
 pm_api_url = ""
 pm_api_token_id = ""
 pm_api_token_secret = ""
@@ -9,15 +9,8 @@ ssh_public_key_path = "/root/.ssh/id_ed25519.pub"
 ssh_private_key_path = "/root/.ssh/id_ed25519"
 ssh_public_key = ""
 
-# Шаблон
+# Шаблон (создать вручную в Proxmox UI)
 template_vmid = 9000
-template_specs = {
-  cpu_cores     = 2
-  cpu_sockets   = 1
-  memory_mb     = 2048
-  disk_size_gb  = 12
-  disk_iothread = true
-}
 
 # Кластер
 cluster_config = {
@@ -55,7 +48,7 @@ vm_specs = {
   }
 }
 
-# Сеть
+# Сеть (ИЗМЕНИТЕ НА СВОЮ!)
 network_config = {
   subnet       = "192.168.0.0/24"
   gateway      = "192.168.0.1"
@@ -74,4 +67,4 @@ storage = "local-lvm"
 bridge = "vmbr0"
 
 # Автоподбор IP (заполнится workflow)
-# static_ip_base будет вычислен и передан через TF_VAR_
+static_ip_base = 100

@@ -14,40 +14,36 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
+# Локальные вычисления
 locals {
-  master_indices = range(var.cluster_config.masters_count)
+  subnet_prefix = split(".", var.network_config.subnet)[0]
+  master_ip     = "${local.subnet_prefix}.${var.static_ip_base}"
 }
 
 resource "proxmox_vm_qemu" "k8s_master" {
-  for_each = { for idx in local.master_indices : idx => idx }
-
-  name        = "k8s-master-${var.vmid_ranges.masters.start + each.key}"
-  ipconfig0 = "ip=${var.network_config.subnet_prefix}.${var.static_ip_base}/24,gw=${var.network_config.gateway}"
+  name        = "k8s-master-${var.vmid_ranges.masters.start}"
+  vmid        = var.vmid_ranges.masters.start
   target_node = var.target_node
-  vmid        = var.vmid_ranges.masters.start + each.key
-  description = "K8s Master ${each.key + 1}"
-  
-  clone = "ubuntu-template"
-  full_clone = true
+  desc        = "K8s Master Node"
+  clone       = "ubuntu-template"
   
   cpu {
     cores   = var.vm_specs.master.cpu_cores
     sockets = var.vm_specs.master.cpu_sockets
   }
   
-  memory  = var.vm_specs.master.memory_mb
-  start_at_node_boot = true
+  memory = var.vm_specs.master.memory_mb
   
   disk {
-    slot     = "scsi0"
-    type     = "disk"
+    slot     = 0
+    type     = "scsi"
     storage  = var.vm_specs.master.disk_storage
     size     = "${var.vm_specs.master.disk_size_gb}G"
     iothread = var.vm_specs.master.disk_iothread
   }
   
   disk {
-    slot    = "scsi2"
+    slot    = 2
     type    = "cloudinit"
     storage = var.vm_specs.master.cloudinit_storage
   }
@@ -58,21 +54,23 @@ resource "proxmox_vm_qemu" "k8s_master" {
     bridge = var.network_config.bridge
   }
   
-  ciuser       = var.cloud_init.user
-  sshkeys      = file(var.ssh_public_key_path)
-  nameserver   = join(" ", var.network_config.dns_servers)
-  searchdomain = join(" ", var.cloud_init.search_domains)
+  ipconfig0 = "ip=${local.master_ip}/24,gw=${var.network_config.gateway}"
   
-  agent  = 1
-  scsihw = "virtio-scsi-single"
-}
-
-output "masters" {
-  value = {
-    for idx, vm in proxmox_vm_qemu.k8s_master : idx => {
-      name = vm.name
-      vmid = vm.vmid
-      ip   = var.auto_static_ips ? cidrhost(var.network_config.subnet, var.static_ip_base + idx) : "dhcp"
-    }
+  ciuser       = var.cloud_init.user
+  searchdomain = join(" ", var.cloud_init.search_domains)
+  nameserver   = join(" ", var.network_config.dns_servers)
+  sshkeys      = var.ssh_public_key
+  
+  boot      = "order=scsi0"
+  bootdisk  = "scsi0"
+  scsihw    = "virtio-scsi-pci"
+  agent     = 1
+  os_type   = "cloud-init"
+  
+  lifecycle {
+    ignore_changes = [
+      disk[0].size,
+      network,
+    ]
   }
 }

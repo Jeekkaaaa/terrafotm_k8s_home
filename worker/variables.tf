@@ -11,24 +11,8 @@ variable "pm_api_token_secret" {
 }
 
 variable "target_node" {
-  type = string
-}
-
-variable "ssh_public_key_path" {
-  type = string
-}
-
-variable "ssh_private_key_path" {
-  type = string
-}
-
-variable "cluster_config" {
-  type = object({
-    masters_count = number
-    workers_count = number
-    cluster_name  = string
-    domain        = string
-  })
+  type    = string
+  default = "pve-k8s"
 }
 
 variable "vmid_ranges" {
@@ -41,23 +25,23 @@ variable "vmid_ranges" {
 variable "vm_specs" {
   type = object({
     worker = object({
-      cpu_cores          = number
-      cpu_sockets        = number
-      memory_mb          = number
-      disk_size_gb       = number
-      disk_storage       = string
-      disk_iothread      = bool
-      cloudinit_storage  = string
+      cpu_cores         = number
+      cpu_sockets       = number
+      memory_mb         = number
+      disk_size_gb      = number
+      disk_storage      = string
+      disk_iothread     = bool
+      cloudinit_storage = string
     })
   })
 }
 
-variable "network_config" {
+variable "cluster_config" {
   type = object({
-    subnet       = string
-    gateway      = string
-    dns_servers  = list(string)
-    bridge       = string
+    masters_count = number
+    workers_count = number
+    cluster_name  = string
+    domain        = string
   })
 }
 
@@ -68,44 +52,6 @@ variable "cloud_init" {
   })
 }
 
-variable "auto_static_ips" {
-  type = bool
-}
-
-variable "static_ip_base" {
-  type = number
-}
-
-variable "template_vmid" {
-  type = number
-}
-
-variable "storage" {
-  type = string
-}
-
-variable "bridge" {
-  type = string
-}
-
-variable "template_specs" {
-  type = object({
-    cpu_cores     = number
-    cpu_sockets   = number
-    memory_mb     = number
-    disk_size_gb  = number
-    disk_iothread = bool
-  })
-}
-
-variable "ssh_public_key" {
-  type = string
-}
-
-variable "static_ip_base" {
-  type = number
-}
-
 variable "network_config" {
   type = object({
     subnet       = string
@@ -117,4 +63,18 @@ variable "network_config" {
 
 variable "static_ip_base" {
   type = number
+}
+
+variable "ssh_public_key" {
+  type = string
+}
+
+variable "storage" {
+  type    = string
+  default = "local-lvm"
+}
+
+variable "bridge" {
+  type    = string
+  default = "vmbr0"
 }

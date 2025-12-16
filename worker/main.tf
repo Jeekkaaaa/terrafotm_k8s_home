@@ -14,6 +14,11 @@ provider "proxmox" {
   pm_tls_insecure     = true
 }
 
+# Локальные вычисления
+locals {
+  subnet_prefix = split(".", var.network_config.subnet)[0]
+}
+
 resource "proxmox_vm_qemu" "k8s_worker" {
   count = var.cluster_config.workers_count
   
@@ -50,8 +55,8 @@ resource "proxmox_vm_qemu" "k8s_worker" {
     bridge = var.network_config.bridge
   }
   
-  # Динамический IP на основе static_ip_base
-  ipconfig0 = "ip=${var.network_config.subnet_prefix}.${var.static_ip_base + count.index + var.cluster_config.masters_count}/24,gw=${var.network_config.gateway}"
+  # Динамический IP: мастер занимает первый IP, воркеры следующие
+  ipconfig0 = "ip=${local.subnet_prefix}.${var.static_ip_base + count.index + var.cluster_config.masters_count}/24,gw=${var.network_config.gateway}"
   
   ciuser       = var.cloud_init.user
   searchdomain = join(" ", var.cloud_init.search_domains)
