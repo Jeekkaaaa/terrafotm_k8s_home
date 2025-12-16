@@ -12,16 +12,12 @@ provider "proxmox" {
   api_token = "${var.pm_api_token_id}=${var.pm_api_token_secret}"
   insecure  = true
   
-  # Увеличиваем таймауты провайдера
-  timeout {
-    create  = "60m"
-    update  = "60m"
-    delete  = "30m"
-    read    = "10m"
-  }
+  # Таймаут соединения для провайдера (в миллисекундах)
+  http_retry_max     = 5
+  http_retry_timeout = 30000  # 30 секунд
 }
 
-# Загрузка образа с максимальными таймаутами
+# Загрузка образа с увеличенными таймаутами
 resource "proxmox_virtual_environment_file" "ubuntu_cloud_image" {
   content_type = "iso"
   datastore_id = var.storage_iso
@@ -32,7 +28,6 @@ resource "proxmox_virtual_environment_file" "ubuntu_cloud_image" {
   source_file {
     path     = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
     insecure = true
-    timeout_download = 7200  # Таймаут на скачивание
   }
 }
 
