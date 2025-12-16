@@ -18,6 +18,10 @@ variable "ssh_public_key_path" {
   type = string
 }
 
+variable "ssh_private_key_path" {
+  type = string
+}
+
 variable "cluster_config" {
   type = object({
     masters_count = number
@@ -37,11 +41,13 @@ variable "vmid_ranges" {
 variable "vm_specs" {
   type = object({
     worker = object({
-      cpu_cores    = number
-      cpu_sockets  = number
-      memory_mb    = number
-      disk_size_gb = number
-      disk_storage = string
+      cpu_cores          = number
+      cpu_sockets        = number
+      memory_mb          = number
+      disk_size_gb       = number
+      disk_storage       = string
+      disk_iothread      = bool
+      cloudinit_storage  = string
     })
   })
 }
@@ -70,10 +76,6 @@ variable "static_ip_base" {
   type = number
 }
 
-variable "ssh_private_key_path" {
-  type = string
-}
-
 variable "template_vmid" {
   type = number
 }
@@ -84,19 +86,4 @@ variable "storage" {
 
 variable "bridge" {
   type = string
-}
-
-# Расширяем vm_specs.worker
-variable "vm_specs" {
-  type = object({
-    worker = object({
-      cpu_cores          = number
-      cpu_sockets        = number
-      memory_mb          = number
-      disk_size_gb       = number
-      disk_storage       = string
-      disk_iothread      = bool      # ДОБАВЛЕНО
-      cloudinit_storage  = string    # ДОБАВЛЕНО
-    })
-  })
 }
