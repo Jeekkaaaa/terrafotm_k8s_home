@@ -1,7 +1,4 @@
 # Proxmox API (заполнится через secrets)
-pm_api_url = ""
-pm_api_token_id = ""
-pm_api_token_secret = ""
 
 # Основные
 target_node = "pve-k8s"
@@ -55,10 +52,6 @@ network_config = {
 }
 
 # Cloud-init
-cloud_init = {
-  user           = "ubuntu"
-  search_domains = ["home.lab"]
-}
 
 # Остальное
 storage = "local-lvm"
