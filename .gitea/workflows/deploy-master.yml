@@ -13,25 +13,20 @@ jobs:
           echo "=== Парсим конфигурацию сети ==="
           CONFIG="config.auto.tfvars"
           
-          # Извлекаем сеть из конфига
           SUBNET=$(grep 'subnet' "$CONFIG" | cut -d'"' -f2)
           GATEWAY=$(grep 'gateway' "$CONFIG" | cut -d'"' -f2)
           
           if [ -z "$SUBNET" ] || [ -z "$GATEWAY" ]; then
-            echo "❌ Не удалось прочитать network_config из $CONFIG"
+            echo "❌ Не удалось прочитать network_config"
             exit 1
           fi
           
-          # Извлекаем префикс сети (например, 10.0.0 из 10.0.0.0/24)
           NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | cut -d. -f1-3)
           
           echo "Сеть: $SUBNET"
-          echo "Шлюз: $GATEWAY"
           echo "Префикс: $NETWORK_PREFIX"
           
-          # Сохраняем в environment
           echo "NETWORK_PREFIX=$NETWORK_PREFIX" >> $GITHUB_ENV
-          echo "SUBNET=$SUBNET" >> $GITHUB_ENV
           echo "GATEWAY=$GATEWAY" >> $GITHUB_ENV
 
       - name: Generate SSH Key
@@ -44,7 +39,7 @@ jobs:
 
       - name: Auto-find Free IP Range
         run: |
-          echo "=== Автопоиск свободных IP в сети $NETWORK_PREFIX.XXX ==="
+          echo "=== Автопоиск свободных IP ==="
           
           MASTERS=1
           WORKERS=2
@@ -67,14 +62,10 @@ jobs:
               echo "✅ Найден свободный диапазон: $start"
               echo "IP адреса:"
               for i in $(seq 0 $((TOTAL - 1))); do
-                echo "  $NETWORK_PREFIX.$((start + i))"
+                IP_CALC=$((start + i))
+                echo "  $NETWORK_PREFIX.$IP_CALC"
               done
               
-              # Записываем в файл для использования в Terraform
-              echo "static_ip_base = $start" >> config.auto.tfvars
-              echo "static_ip_base = $start" >> master/config.auto.tfvars
-              echo "static_ip_base = $start" >> worker/config.auto.tfvars
-              echo "GATEWAY=$GATEWAY" >> $GITHUB_ENV
               echo "STATIC_IP_BASE=$start" >> $GITHUB_ENV
               exit 0
             fi
@@ -83,31 +74,23 @@ jobs:
           echo "❌ Свободный диапазон не найден"
           exit 1
 
-      - name: Copy config to all dirs
+      - name: Update configs with IP and SSH
         run: |
-          cp config.auto.tfvars template/
+          echo "=== Обновляем конфиги ==="
+          
+          # Добавляем static_ip_base в config.auto.tfvars
+          echo "static_ip_base = $STATIC_IP_BASE" >> config.auto.tfvars
+          echo "ssh_public_key = \"$SSH_PUB_KEY\"" >> config.auto.tfvars
+          
+          # Копируем обновленный конфиг
           cp config.auto.tfvars master/
           cp config.auto.tfvars worker/
 
-      - name: Update SSH key in configs
+      - name: Terraform Apply (only master and worker)
         run: |
-          for dir in template master worker; do
-            sed -i "s|ssh_public_key = \"\"|ssh_public_key = \"$SSH_PUB_KEY\"|" $dir/config.auto.tfvars
-          done
-
-      - name: Terraform Apply
-        run: |
-          # Сначала шаблон
-          echo "=== Создаем шаблон ==="
-          cd template
-          terraform init
-          terraform apply -auto-approve -input=false
-          cd ..
+          # ПРЕДПОЛОЖЕНИЕ: шаблон уже создан вручную в Proxmox
+          echo "=== Создаем master и worker ноды ==="
           
-          # Ждем создания шаблона
-          sleep 10
-          
-          # Потом master и worker
           for dir in master worker; do
             echo "=== Работаем в $dir/ ==="
             cd "$dir"
@@ -119,5 +102,3 @@ jobs:
           TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
-          TF_VAR_gateway: ${{ env.GATEWAY }}
-          TF_VAR_static_ip_base: ${{ env.STATIC_IP_BASE }}
