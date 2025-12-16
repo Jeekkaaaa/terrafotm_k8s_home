@@ -29,20 +29,20 @@ resource "terraform_data" "check_and_download_image" {
 
       # ИСПРАВЛЕНО: правильное извлечение хоста из URL
       # URL вида: https://192.168.0.223:8006
-      PM_URL="$TF_VAR_pm_api_url"
-      PM_HOST_PORT="${PM_URL#https://}"
-      PM_HOST=$(echo "$PM_HOST_PORT" | cut -d: -f1)
-      PM_PORT=$(echo "$PM_HOST_PORT" | cut -d: -f2)
-      PM_TOKEN="$TF_VAR_pm_api_token_id=$TF_VAR_pm_api_token_secret"
-      TARGET_NODE="$TF_VAR_target_node"
+      PM_URL="${var.pm_api_url}"
+      PM_HOST_PORT=$${PM_URL#https://}
+      PM_HOST=$(echo "$$PM_HOST_PORT" | cut -d: -f1)
+      PM_PORT=$(echo "$$PM_HOST_PORT" | cut -d: -f2)
+      PM_TOKEN="${var.pm_api_token_id}=${var.pm_api_token_secret}"
+      TARGET_NODE="${var.target_node}"
 
-      echo "Подключаемся к Proxmox: $PM_HOST:$PM_PORT"
+      echo "Подключаемся к Proxmox: $$PM_HOST:$$PM_PORT"
       
       # Пытаемся проверить через API Proxmox (с обработкой ошибок)
-      API_CHECK=$(curl -s -k -f -H "Authorization: PVEAPIToken=$PM_TOKEN" \
-        "https://$PM_HOST:$PM_PORT/api2/json/nodes/$TARGET_NODE/storage/local/content" 2>/dev/null || echo '{"data":[]}')
+      API_CHECK=$(curl -s -k -f -H "Authorization: PVEAPIToken=$$PM_TOKEN" \
+        "https://$$PM_HOST:$$PM_PORT/api2/json/nodes/$$TARGET_NODE/storage/local/content" 2>/dev/null || echo '{"data":[]}')
       
-      if echo "$API_CHECK" | grep -q "jammy-server-cloudimg-amd64.img"; then
+      if echo "$$API_CHECK" | grep -q "jammy-server-cloudimg-amd64.img"; then
         echo "✅ Образ уже существует в хранилище Proxmox. Пропускаем загрузку."
         exit 0
       else
@@ -52,22 +52,22 @@ resource "terraform_data" "check_and_download_image" {
       echo "Скачивание образа Ubuntu..."
       curl -L -f -o /tmp/jammy-server-cloudimg-amd64.img \
         "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-      echo "✅ Образ скачан ($(du -h /tmp/jammy-server-cloudimg-amd64.img | cut -f1))"
+      echo "✅ Образ скачан ($$(du -h /tmp/jammy-server-cloudimg-amd64.img | cut -f1))"
       
       # Пытаемся загрузить в Proxmox с retry
       echo "Попытка загрузки образа в Proxmox..."
-      UPLOAD_URL="https://$PM_HOST:$PM_PORT/api2/json/nodes/$TARGET_NODE/storage/local/upload"
+      UPLOAD_URL="https://$$PM_HOST:$$PM_PORT/api2/json/nodes/$$TARGET_NODE/storage/local/upload"
       
       # Пробуем 2 раза с увеличенным таймаутом
       for ATTEMPT in 1 2; do
-        echo "Попытка загрузки $ATTEMPT/2..."
+        echo "Попытка загрузки $$ATTEMPT/2..."
         
         # ИСПРАВЛЕНО: правильный синтаксис if-then
         if curl -k -X POST \
-          -H "Authorization: PVEAPIToken=$PM_TOKEN" \
+          -H "Authorization: PVEAPIToken=$$PM_TOKEN" \
           -F "content=iso" \
           -F "filename=@/tmp/jammy-server-cloudimg-amd64.img" \
-          "$UPLOAD_URL" \
+          "$$UPLOAD_URL" \
           --max-time 3600 2>/dev/null
         then
           echo "✅ Образ загружен в Proxmox!"
@@ -76,7 +76,7 @@ resource "terraform_data" "check_and_download_image" {
           rm -f /tmp/jammy-server-cloudimg-amd64.img
           exit 0
         else
-          echo "⚠️ Попытка $ATTEMPT не удалась. Ждем 30 секунд..."
+          echo "⚠️ Попытка $$ATTEMPT не удалась. Ждем 30 секунд..."
           sleep 30
         fi
       done
@@ -84,7 +84,7 @@ resource "terraform_data" "check_and_download_image" {
       echo "❌ Не удалось загрузить образ через API. Возможно сетевые проблемы."
       echo "Образ сохранен в /tmp/jammy-server-cloudimg-amd64.img"
       echo "Для продолжения загрузите образ вручную:"
-      echo "scp /tmp/jammy-server-cloudimg-amd64.img root@$PM_HOST:/var/lib/vz/template/iso/"
+      echo "scp /tmp/jammy-server-cloudimg-amd64.img root@$$PM_HOST:/var/lib/vz/template/iso/"
       echo "Или добавьте образ вручную через Proxmox UI."
       exit 1
     EOT
