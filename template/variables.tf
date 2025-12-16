@@ -24,6 +24,14 @@ variable "ssh_public_key" {
   type = string
 }
 
+variable "ssh_public_key_path" {
+  type = string
+}
+
+variable "ssh_private_key_path" {
+  type = string
+}
+
 variable "storage" {
   type    = string
   default = "local-lvm"
@@ -42,10 +50,6 @@ variable "template_specs" {
     disk_size_gb  = number
     disk_iothread = bool
   })
-}
-
-variable "ssh_private_key_path" {
-  type = string
 }
 
 variable "auto_static_ips" {
@@ -109,12 +113,4 @@ variable "vmid_ranges" {
     masters = object({ start = number, end = number })
     workers = object({ start = number, end = number })
   })
-}
-
-variable "ssh_public_key_path" {
-  type = string
-}
-
-variable "ssh_public_key_path" {
-  type = string
 }
