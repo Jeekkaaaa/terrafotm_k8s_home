@@ -97,9 +97,6 @@ jobs:
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
 
-      - name: Terraform Validate
-        run: terraform validate
-
       - name: Terraform Plan
         run: terraform plan -input=false -var-file=config.auto.tfvars
         env:
