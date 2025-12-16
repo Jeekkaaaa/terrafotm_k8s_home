@@ -87,3 +87,17 @@ variable "storage" {
 variable "bridge" {
   type = string
 }
+
+variable "template_specs" {
+  type = object({
+    cpu_cores     = number
+    cpu_sockets   = number
+    memory_mb     = number
+    disk_size_gb  = number
+    disk_iothread = bool
+  })
+}
+
+variable "ssh_public_key" {
+  type = string
+}

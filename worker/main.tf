@@ -38,15 +38,15 @@ resource "proxmox_vm_qemu" "k8s_worker" {
   start_at_node_boot = true
   
   disk {
-    slot     = 0
-    type     = "scsi"
+    slot     = "scsi0"
+    type     = "disk"
     storage  = var.vm_specs.worker.disk_storage
     size     = "${var.vm_specs.worker.disk_size_gb}G"
     iothread = var.vm_specs.worker.disk_iothread
   }
   
   disk {
-    slot    = 2
+    slot    = "scsi2"
     type    = "cloudinit"
     storage = var.vm_specs.worker.cloudinit_storage
   }
