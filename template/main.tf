@@ -1,8 +1,13 @@
+# ~/gitmnt/terrafotm_k8s_home/template/main.tf
 terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
       version = "0.56.1"
+    }
+    http = {
+      source  = "hashicorp/http"
+      version = "3.4.0"
     }
   }
 }
@@ -13,21 +18,54 @@ provider "proxmox" {
   insecure  = true
 }
 
-# Загрузка образа с увеличенными таймаутами
+provider "http" {}
+
+# 1. Скачиваем образ через http провайдер (напрямую в runner)
+data "http" "ubuntu_image" {
+  url = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+  
+  # Повторяем попытку при сбоях
+  retry {
+    attempts     = 5
+    min_delay_ms = 5000
+    max_delay_ms = 30000
+  }
+  
+  lifecycle {
+    postcondition {
+      condition     = self.status_code == 200
+      error_message = "Не удалось скачать образ Ubuntu. Статус: ${self.status_code}"
+    }
+  }
+}
+
+# 2. Сохраняем скачанный образ во временный файл
+resource "local_file" "ubuntu_image_file" {
+  filename = "/tmp/jammy-server-cloudimg-amd64.img"
+  content_base64 = data.http.ubuntu_image.response_body_base64
+  
+  provisioner "local-exec" {
+    when    = destroy
+    command = "rm -f /tmp/jammy-server-cloudimg-amd64.img"
+  }
+}
+
+# 3. Загружаем локальный файл в Proxmox
 resource "proxmox_virtual_environment_file" "ubuntu_cloud_image" {
   content_type = "iso"
   datastore_id = var.storage_iso
   node_name    = var.target_node
   overwrite    = true
-  timeout_upload = 10800  # 3 часа!
   
+  # Используем локальный файл вместо удаленного URL
   source_file {
-    path     = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-    insecure = true
+    path = "/tmp/jammy-server-cloudimg-amd64.img"
   }
+  
+  depends_on = [local_file.ubuntu_image_file]
 }
 
-# Создание шаблона
+# 4. Создаем шаблон (остается без изменений)
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
   depends_on = [proxmox_virtual_environment_file.ubuntu_cloud_image]
   
@@ -46,7 +84,7 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
   
   disk {
     datastore_id = var.storage_vm
-    file_id      = "${var.target_node}/${var.storage_iso}:iso/${proxmox_virtual_environment_file.ubuntu_cloud_image.file_name}"
+    file_id      = "${var.target_node}/${var.storage_iso}:iso/jammy-server-cloudimg-amd64.img"
     size         = var.template_specs.disk_size_gb
     iothread     = var.template_specs.disk_iothread
     interface    = "scsi0"
