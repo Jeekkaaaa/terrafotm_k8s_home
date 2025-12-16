@@ -17,7 +17,7 @@ jobs:
 
       - name: Auto-find Free IP Range
         run: |
-          echo "=== Автоматический поиск свободного IP диапазона ==="
+          echo "=== Автопоиск свободных IP ==="
           
           CONFIG="config.auto.tfvars"
           [ -f "$CONFIG" ] || { echo "❌ $CONFIG не найден"; exit 1; }
@@ -27,36 +27,16 @@ jobs:
           MASTERS=$(grep 'masters_count' "$CONFIG" | awk '{print $3}')
           WORKERS=$(grep 'workers_count' "$CONFIG" | awk '{print $3}')
           
-          [ -z "$SUBNET" ] && { echo "❌ Не найден subnet"; exit 1; }
-          [ -z "$CURRENT_BASE" ] && { echo "❌ Не найден static_ip_base"; exit 1; }
+          [ -z "$SUBNET" ] && SUBNET="192.168.0.0/24"
+          [ -z "$CURRENT_BASE" ] && CURRENT_BASE=110
           [ -z "$MASTERS" ] && MASTERS=1
           [ -z "$WORKERS" ] && WORKERS=2
           
           TOTAL=$((MASTERS + WORKERS))
           NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | cut -d. -f1-3)
           
-          echo "Нужно $TOTAL IP ($MASTERS мастер + $WORKERS воркер)"
-          echo "Текущая база: $CURRENT_BASE"
-          echo "Диапазон: $NETWORK_PREFIX.[$CURRENT_BASE-$((CURRENT_BASE + TOTAL - 1))]"
+          echo "Ищем $TOTAL свободных IP..."
           
-          echo "Проверяем текущий диапазон..."
-          CURRENT_FREE=true
-          for i in $(seq 0 $((TOTAL - 1))); do
-            IP="$NETWORK_PREFIX.$((CURRENT_BASE + i))"
-            if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
-              echo "  $IP занят ❌"
-              CURRENT_FREE=false
-            else
-              echo "  $IP свободен ✅"
-            fi
-          done
-          
-          if [ "$CURRENT_FREE" = true ]; then
-            echo "✅ Текущий диапазон свободен, используем его"
-            exit 0
-          fi
-          
-          echo "Ищем свободный диапазон..."
           for start in $(seq 120 240); do
             FREE=true
             for offset in $(seq 0 $((TOTAL - 1))); do
@@ -71,7 +51,7 @@ jobs:
               echo "✅ Найден свободный диапазон: $start"
               sed -i "s/static_ip_base = $CURRENT_BASE/static_ip_base = $start/" "$CONFIG"
               echo "Обновлено: static_ip_base = $start"
-              echo "Новые IP:"
+              echo "IP адреса:"
               for i in $(seq 0 $((TOTAL - 1))); do
                 echo "  $NETWORK_PREFIX.$((start + i))"
               done
@@ -79,16 +59,11 @@ jobs:
             fi
           done
           
-          echo "❌ Не найдено свободного диапазона"
+          echo "❌ Свободный диапазон не найден"
           exit 1
 
       - name: Clean Terraform Cache
         run: rm -rf .terraform .terraform.lock.hcl
-
-      - name: Show Configuration
-        run: |
-          echo "=== Текущая конфигурация ==="
-          grep -E "(static_ip_base|masters_count|workers_count|subnet)" config.auto.tfvars
 
       - name: Terraform Init
         run: terraform init

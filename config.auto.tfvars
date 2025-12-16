@@ -1,4 +1,4 @@
-# Proxmox API (заполняются через secrets)
+# Proxmox API (через secrets в workflow)
 pm_api_url          = ""
 pm_api_token_id     = ""
 pm_api_token_secret = ""
