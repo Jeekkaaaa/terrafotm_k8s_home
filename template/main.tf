@@ -27,48 +27,69 @@ resource "terraform_data" "check_and_download_image" {
       set -e
       echo "Проверка существования образа в Proxmox..."
 
-      PM_HOST=$(echo "$TF_VAR_pm_api_url" | sed 's|https://||; s|:8006||')
+      # ИСПРАВЛЕНО: правильное извлечение хоста из URL
+      # URL вида: https://192.168.0.223:8006
+      PM_HOST_PORT=$(echo "$TF_VAR_pm_api_url" | sed 's|https://||')
+      PM_HOST=$(echo "$PM_HOST_PORT" | cut -d: -f1)
+      PM_PORT=$(echo "$PM_HOST_PORT" | cut -d: -f2)
       PM_TOKEN="$TF_VAR_pm_api_token_id=$TF_VAR_pm_api_token_secret"
       TARGET_NODE="$TF_VAR_target_node"
 
-      # Пытаемся проверить через API Proxmox
-      API_CHECK=$(curl -s -k -f -H "Authorization: PVEAPIToken=$PM_TOKEN" \
-        "https://$PM_HOST:8006/api2/json/nodes/$TARGET_NODE/storage/local/content" 2>/dev/null || echo '{"data":[]}')
-
-      if echo "$API_CHECK" | grep -q "jammy-server-cloudimg-amd64.img"; then
-        echo "✅ Образ уже существует в хранилище Proxmox. Пропускаем загрузку."
-        exit 0
+      echo "Подключаемся к Proxmox: $PM_HOST:$PM_PORT"
+      
+      # Пытаемся проверить через API Proxmox (с обработкой ошибок)
+      if API_CHECK=$(curl -s -k -f -H "Authorization: PVEAPIToken=$PM_TOKEN" \
+        "https://$PM_HOST:$PM_PORT/api2/json/nodes/$TARGET_NODE/storage/local/content" 2>/dev/null); then
+        # Успешное подключение
+        if echo "$API_CHECK" | grep -q "jammy-server-cloudimg-amd64.img"; then
+          echo "✅ Образ уже существует в хранилище Proxmox. Пропускаем загрузку."
+          exit 0
+        else
+          echo "⚠️ Образ не найден в хранилище Proxmox."
+        fi
       else
-        echo "⚠️ Образ не найден в хранилище Proxmox (или ошибка API)."
-        echo "Скачивание образа Ubuntu..."
-        curl -L -f -o /tmp/jammy-server-cloudimg-amd64.img \
-          "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-        echo "✅ Образ скачан ($(du -h /tmp/jammy-server-cloudimg-amd64.img | cut -f1))"
-        
-        # ЗАГРУЗКА ЧЕРЕЗ API PROXMOX
-        echo "Загрузка образа в Proxmox через API..."
-        
-        # Получаем ticket для загрузки
-        UPLOAD_URL="https://$PM_HOST:8006/api2/json/nodes/$TARGET_NODE/storage/local/upload"
-        
-        # Делаем загрузку с большим таймаутом
-        curl -k -X POST \
+        echo "⚠️ Не удалось подключиться к API Proxmox. Продолжаем скачивание..."
+      fi
+      
+      echo "Скачивание образа Ubuntu..."
+      curl -L -f -o /tmp/jammy-server-cloudimg-amd64.img \
+        "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+      echo "✅ Образ скачан ($(du -h /tmp/jammy-server-cloudimg-amd64.img | cut -f1))"
+      
+      # Пытаемся загрузить в Proxmox с retry
+      echo "Попытка загрузки образа в Proxmox..."
+      UPLOAD_URL="https://$PM_HOST:$PM_PORT/api2/json/nodes/$TARGET_NODE/storage/local/upload"
+      
+      # Пробуем 2 раза с увеличенным таймаутом
+      for ATTEMPT in {1..2}; do
+        echo "Попытка загрузки $ATTEMPT/2..."
+        if curl -k -X POST \
           -H "Authorization: PVEAPIToken=$PM_TOKEN" \
           -F "content=iso" \
           -F "filename=@/tmp/jammy-server-cloudimg-amd64.img" \
           "$UPLOAD_URL" \
-          --max-time 7200  # 2 часа таймаут
-        
-        echo "✅ Образ загружен в Proxmox!"
-        
-        # Очищаем временный файл
-        rm -f /tmp/jammy-server-cloudimg-amd64.img
-      fi
+          --max-time 3600  # 1 час таймаут; then
+          echo "✅ Образ загружен в Proxmox!"
+          
+          # Очищаем временный файл
+          rm -f /tmp/jammy-server-cloudimg-amd64.img
+          exit 0
+        else
+          echo "⚠️ Попытка $ATTEMPT не удалась. Ждем 30 секунд..."
+          sleep 30
+        fi
+      done
+      
+      echo "❌ Не удалось загрузить образ через API. Возможно сетевые проблемы."
+      echo "Образ сохранен в /tmp/jammy-server-cloudimg-amd64.img"
+      echo "Для продолжения загрузите образ вручную:"
+      echo "scp /tmp/jammy-server-cloudimg-amd64.img root@$PM_HOST:/var/lib/vz/template/iso/"
+      exit 1
     EOT
   }
 }
 
-# Создание шаблона
+# Создание шаблона (с условием - только если образ предположительно загружен)
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
   depends_on = [terraform_data.check_and_download_image]
 
@@ -134,5 +155,5 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
 }
 
 output "template_ready" {
-  value = "Template ${var.template_vmid} готов к работе (образ проверен/скачан/загружен)."
+  value = "Template ${var.template_vmid} готов к работе (образ проверен/скачан)."
 }
