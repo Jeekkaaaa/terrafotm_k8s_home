@@ -75,6 +75,3 @@ template_specs = {
 storage_iso = "local"      # Для образов ISO (тип Directory)
 storage_vm  = "local-lvm"  # Для дисков ВМ (тип LVM)
 
-# SSH доступ для провайдера proxmox (заполняются из секретов Gitea)
-proxmox_ssh_username = ""
-proxmox_ssh_password = ""
