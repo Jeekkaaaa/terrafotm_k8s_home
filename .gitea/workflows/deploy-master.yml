@@ -82,6 +82,9 @@ jobs:
           TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          # SSH СЕКРЕТЫ ДЛЯ ПРОВАЙДЕРА
+          TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
+          TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
 
       - name: Deploy Master and Workers
         run: |
@@ -98,3 +101,6 @@ jobs:
           TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          # SSH СЕКРЕТЫ ДЛЯ MASTER/WORKER
+          TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
+          TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}

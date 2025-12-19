@@ -117,3 +117,16 @@ variable "storage_iso" {
 variable "storage_vm" {
   type = string
 }
+
+variable "proxmox_ssh_username" {
+  type        = string
+  description = "Имя пользователя для SSH подключения к хосту Proxmox"
+  default     = ""  # Значение из секретов Gitea
+}
+
+variable "proxmox_ssh_password" {
+  type        = string
+  description = "Пароль пользователя для SSH подключения к хосту Proxmox"
+  sensitive   = true
+  default     = ""  # Значение из секретов Gitea
+}

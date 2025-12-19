@@ -78,3 +78,16 @@ variable "bridge" {
   type    = string
   default = "vmbr0"
 }
+
+variable "proxmox_ssh_username" {
+  type        = string
+  description = "Имя пользователя для SSH подключения к хосту Proxmox"
+  default     = ""
+}
+
+variable "proxmox_ssh_password" {
+  type        = string
+  description = "Пароль пользователя для SSH подключения к хосту Proxmox"
+  sensitive   = true
+  default     = ""
+}

@@ -12,13 +12,14 @@ provider "proxmox" {
   api_token = "${var.pm_api_token_id}=${var.pm_api_token_secret}"
   insecure  = true
   
-  # ЯВНО ОТКЛЮЧАЕМ SSH ДЛЯ ИЗБЕЖАНИЯ ОШИБОК АУТЕНТИФИКАЦИИ
+  # SSH аутентификация по логину и паролю из секретов
   ssh {
-    agent = false
+    username = var.proxmox_ssh_username
+    password = var.proxmox_ssh_password
   }
 }
 
-# Простая проверка через внешний скрипт
+# Простая проверка
 resource "terraform_data" "check_image" {
   triggers_replace = timestamp()
 
@@ -100,22 +101,4 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
 
 output "template_ready" {
   value = "Template ${var.template_vmid} создан (предполагается что образ уже загружен в Proxmox)."
-}
-
-output "manual_steps" {
-  value = <<-EOT
-    Если шаблон не создался из-за отсутствия образа, выполните вручную на Proxmox:
-    
-    1. Загрузите образ:
-       wget -O /var/lib/vz/template/iso/jammy-server-cloudimg-amd64.img \\
-         https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
-    
-    2. Запустите workflow 'Create Template' снова.
-    
-    Или загрузите через Proxmox UI:
-    - Datacenter -> Storage -> local -> ISO Images -> Upload
-    - Выберите файл или укажите URL: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
-    
-    Примечание: Используется VM ID = ${var.template_vmid}
-  EOT
 }
