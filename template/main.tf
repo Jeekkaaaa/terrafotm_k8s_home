@@ -4,10 +4,6 @@ terraform {
       source  = "bpg/proxmox"
       version = "0.56.1"
     }
-    null = {
-      source  = "hashicorp/null"
-      version = ">= 3.0"
-    }
   }
 }
 
@@ -88,11 +84,16 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
 }
 
 # 3. Импорт Cloud-образа как диска ВМ через SSH
-resource "null_resource" "import_cloud_image" {
+# Используем terraform_data вместо null_resource
+resource "terraform_data" "import_cloud_image" {
   depends_on = [
     proxmox_virtual_environment_download_file.ubuntu_cloud_image,
     proxmox_virtual_environment_vm.ubuntu_template
   ]
+
+  triggers_replace = {
+    vm_id = var.template_vmid
+  }
 
   connection {
     type     = "ssh"
@@ -115,8 +116,12 @@ resource "null_resource" "import_cloud_image" {
 }
 
 # 4. Конвертация ВМ в шаблон
-resource "null_resource" "convert_to_template" {
-  depends_on = [null_resource.import_cloud_image]
+resource "terraform_data" "convert_to_template" {
+  depends_on = [terraform_data.import_cloud_image]
+
+  triggers_replace = {
+    vm_id = var.template_vmid
+  }
 
   connection {
     type     = "ssh"
@@ -135,5 +140,5 @@ resource "null_resource" "convert_to_template" {
 
 output "template_ready" {
   value = "Template ${var.template_vmid} создан из Cloud-образа."
-  depends_on = [null_resource.convert_to_template]
+  depends_on = [terraform_data.convert_to_template]
 }
