@@ -12,32 +12,23 @@ provider "proxmox" {
   api_token = "${var.pm_api_token_id}=${var.pm_api_token_secret}"
   insecure  = true
   
-  # SSH аутентификация по логину и паролю из секретов
   ssh {
     username = var.proxmox_ssh_username
     password = var.proxmox_ssh_password
   }
 }
 
-# Простая проверка
-resource "terraform_data" "check_image" {
-  triggers_replace = timestamp()
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Проверка: предполагаем что образ jammy-server-cloudimg-amd64.img уже загружен в Proxmox"
-      echo "Если образа нет, загрузите его вручную:"
-      echo "wget -O /var/lib/vz/template/iso/jammy-server-cloudimg-amd64.img \\"
-      echo "  https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
-      echo "Или через Proxmox UI: Datacenter -> Storage -> local -> ISO Images -> Upload"
-    EOT
-  }
+# 1. Автозагрузка Cloud-образа в Proxmox
+resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
+  content_type = "iso"
+  datastore_id = var.storage_iso
+  node_name    = var.target_node
+  url          = "https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img"
+  overwrite    = true
 }
 
-# Создание шаблона
+# 2. Создание ВМ без диска (диск добавим через импорт)
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
-  depends_on = [terraform_data.check_image]
-
   name      = "ubuntu-template"
   node_name = var.target_node
   vm_id     = var.template_vmid
@@ -51,13 +42,7 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     dedicated = var.template_specs.memory_mb
   }
 
-  disk {
-    datastore_id = var.storage_vm
-    file_id      = "${var.storage_iso}:iso/jammy-server-cloudimg-amd64.img"
-    size         = var.template_specs.disk_size_gb
-    iothread     = var.template_specs.disk_iothread
-    interface    = "scsi0"
-  }
+  # НЕТ БЛОКА DISK - будет добавлен через importdisk
 
   initialization {
     datastore_id = var.storage_vm
@@ -89,16 +74,62 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     type    = "virtio"
   }
 
-  template = true
+  template = false  # Сначала создаем ВМ, потом конвертируем в шаблон
 
   lifecycle {
     ignore_changes = [
-      disk[0].size,
       network_device,
     ]
   }
 }
 
+# 3. Импорт Cloud-образа как диска ВМ через SSH
+resource "null_resource" "import_cloud_image" {
+  depends_on = [
+    proxmox_virtual_environment_download_file.ubuntu_cloud_image,
+    proxmox_virtual_environment_vm.ubuntu_template
+  ]
+
+  connection {
+    type     = "ssh"
+    user     = var.proxmox_ssh_username
+    password = var.proxmox_ssh_password
+    host     = regex("//([^:/]+)", var.pm_api_url)[0]
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Импортируем Cloud-образ как диск для ВМ ${var.template_vmid}...'",
+      "qm importdisk ${var.template_vmid} /var/lib/vz/template/iso/jammy-server-cloudimg-amd64.img ${var.storage_vm}",
+      "qm set ${var.template_vmid} --scsi0 ${var.storage_vm}:vm-${var.template_vmid}-disk-0",
+      "qm set ${var.template_vmid} --boot order=scsi0",
+      "qm set ${var.template_vmid} --ide2 ${var.storage_vm}:cloudinit",
+      "qm set ${var.template_vmid} --serial0 socket --vga serial0",
+      "qm set ${var.template_vmid} --agent enabled=1"
+    ]
+  }
+}
+
+# 4. Конвертация ВМ в шаблон
+resource "null_resource" "convert_to_template" {
+  depends_on = [null_resource.import_cloud_image]
+
+  connection {
+    type     = "ssh"
+    user     = var.proxmox_ssh_username
+    password = var.proxmox_ssh_password
+    host     = regex("//([^:/]+)", var.pm_api_url)[0]
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "echo 'Конвертируем ВМ ${var.template_vmid} в шаблон...'",
+      "qm template ${var.template_vmid}"
+    ]
+  }
+}
+
 output "template_ready" {
-  value = "Template ${var.template_vmid} создан (предполагается что образ уже загружен в Proxmox)."
+  value = "Template ${var.template_vmid} создан из Cloud-образа."
+  depends_on = [null_resource.convert_to_template]
 }
