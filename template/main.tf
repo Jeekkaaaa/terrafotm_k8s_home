@@ -27,11 +27,12 @@ resource "proxmox_virtual_environment_download_file" "ubuntu_cloud_image" {
   overwrite    = true
 }
 
-# 2. Создание ВМ без диска (диск добавим через импорт)
+# 2. Создание ВМ с МИНИМАЛЬНЫМ диском (1GB) и выключенной
 resource "proxmox_virtual_environment_vm" "ubuntu_template" {
   name      = "ubuntu-template"
   node_name = var.target_node
   vm_id     = var.template_vmid
+  started   = false  # КРИТИЧЕСКИ ВАЖНО: создаем выключенной
 
   cpu {
     cores   = var.template_specs.cpu_cores
@@ -42,7 +43,13 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     dedicated = var.template_specs.memory_mb
   }
 
-  # НЕТ БЛОКА DISK - будет добавлен через importdisk
+  # ВРЕМЕННЫЙ диск 1GB (удалится при импорте)
+  disk {
+    datastore_id = var.storage_vm
+    size         = 1
+    interface    = "scsi0"
+    iothread     = true
+  }
 
   initialization {
     datastore_id = var.storage_vm
@@ -74,17 +81,17 @@ resource "proxmox_virtual_environment_vm" "ubuntu_template" {
     type    = "virtio"
   }
 
-  template = false  # Сначала создаем ВМ, потом конвертируем в шаблон
+  template = false
 
   lifecycle {
     ignore_changes = [
+      disk[0].size,  # Размер изменится при импорте
       network_device,
     ]
   }
 }
 
 # 3. Импорт Cloud-образа как диска ВМ через SSH
-# Используем terraform_data вместо null_resource
 resource "terraform_data" "import_cloud_image" {
   depends_on = [
     proxmox_virtual_environment_download_file.ubuntu_cloud_image,
@@ -105,9 +112,13 @@ resource "terraform_data" "import_cloud_image" {
   provisioner "remote-exec" {
     inline = [
       "echo 'Импортируем Cloud-образ как диск для ВМ ${var.template_vmid}...'",
+      # Удаляем временный диск
+      "qm set ${var.template_vmid} --delete scsi0",
+      # Импортируем Cloud-образ
       "qm importdisk ${var.template_vmid} /var/lib/vz/template/iso/jammy-server-cloudimg-amd64.img ${var.storage_vm}",
       "qm set ${var.template_vmid} --scsi0 ${var.storage_vm}:vm-${var.template_vmid}-disk-0",
       "qm set ${var.template_vmid} --boot order=scsi0",
+      "qm set ${var.template_vmid} --scsihw virtio-scsi-pci",
       "qm set ${var.template_vmid} --ide2 ${var.storage_vm}:cloudinit",
       "qm set ${var.template_vmid} --serial0 socket --vga serial0",
       "qm set ${var.template_vmid} --agent enabled=1"
