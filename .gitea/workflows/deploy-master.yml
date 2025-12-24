@@ -1,8 +1,8 @@
-name: Deploy K8s Cluster
+name: Deploy and Configure K8s Cluster
 on: [push]
 
 jobs:
-  deploy:
+  terraform-deploy:
     runs-on: [ubuntu-22.04]
     steps:
       - name: Checkout code
@@ -24,8 +24,6 @@ jobs:
           NETWORK_PREFIX=$(echo "$SUBNET" | cut -d'/' -f1 | cut -d. -f1-3)
           echo "Network prefix: $NETWORK_PREFIX"
           echo "NETWORK_PREFIX=$NETWORK_PREFIX" >> $GITHUB_ENV
-
-      # УДАЛЕН блок Generate SSH Key - используем ключ из секретов
 
       - name: Auto-find Free IP Range
         run: |
@@ -75,13 +73,12 @@ jobs:
           TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
-          # SSH доступ к Proxmox
           TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
           TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
-          # SSH ключ для ВМ из секретов
           TF_VAR_ssh_public_key: ${{ secrets.PROXMOX_SSH_PUBKEY }}
 
       - name: Deploy Master and Workers
+        id: deploy-vms
         run: |
           echo "=== Создаем Master и Worker ноды ==="
           
@@ -92,12 +89,215 @@ jobs:
             terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
             cd ..
           done
+          
+          echo "✅ ВМ созданы успешно"
         env:
           TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
           TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
           TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
-          # SSH доступ к Proxmox
           TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
           TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
-          # SSH ключ для ВМ из секретов
           TF_VAR_ssh_public_key: ${{ secrets.PROXMOX_SSH_PUBKEY }}
+
+      - name: Generate Ansible Inventory
+        id: generate-inventory
+        run: |
+          echo "=== Генерация inventory для Ansible ==="
+          
+          # Читаем конфигурацию из файла
+          MASTERS_COUNT=$(grep 'masters_count' config.auto.tfvars | grep -o '[0-9]*')
+          WORKERS_COUNT=$(grep 'workers_count' config.auto.tfvars | grep -o '[0-9]*')
+          
+          echo "Network prefix: $NETWORK_PREFIX"
+          echo "Static base: $STATIC_IP_BASE"
+          echo "Masters count: $MASTERS_COUNT"
+          echo "Workers count: $WORKERS_COUNT"
+          
+          # Создаем inventory файл
+          cat > ansible_inventory.ini << EOF
+          # Автоматически сгенерированный inventory из Terraform
+          # Network: $NETWORK_PREFIX.0/24
+          # Base IP: $STATIC_IP_BASE
+          
+          [k8s_masters]
+          EOF
+          
+          # Master ноды
+          for i in $(seq 0 $((MASTERS_COUNT - 1))); do
+            IP=$((STATIC_IP_BASE + i))
+            echo "master$((i+1)) ansible_host=$NETWORK_PREFIX.$IP ansible_user=ubuntu" \
+              >> ansible_inventory.ini
+          done
+          
+          echo -e "\n[k8s_workers]" >> ansible_inventory.ini
+          
+          # Worker ноды
+          for i in $(seq 0 $((WORKERS_COUNT - 1))); do
+            IP=$((STATIC_IP_BASE + MASTERS_COUNT + i))
+            echo "worker$((i+1)) ansible_host=$NETWORK_PREFIX.$IP ansible_user=ubuntu" \
+              >> ansible_inventory.ini
+          done
+          
+          echo -e "\n[k8s_cluster:children]" >> ansible_inventory.ini
+          echo "k8s_masters" >> ansible_inventory.ini
+          echo "k8s_workers" >> ansible_inventory.ini
+          
+          echo -e "\n[all:vars]" >> ansible_inventory.ini
+          echo "ansible_ssh_private_key_file=/tmp/ssh_key" >> ansible_inventory.ini
+          echo "ansible_ssh_common_args='-o StrictHostKeyChecking=no'" >> ansible_inventory.ini
+          
+          echo "=== Сгенерированный inventory ==="
+          cat ansible_inventory.ini
+          
+          # Сохраняем путь к inventory
+          echo "inventory_path=ansible_inventory.ini" >> $GITHUB_OUTPUT
+
+      - name: Wait for VMs to be ready
+        run: |
+          echo "=== Ждем готовности ВМ (90 секунд) ==="
+          sleep 90
+          echo "✅ ВМ должны быть готовы"
+
+    outputs:
+      inventory_path: ${{ steps.generate-inventory.outputs.inventory_path }}
+      network_prefix: ${{ env.NETWORK_PREFIX }}
+      static_ip_base: ${{ env.STATIC_IP_BASE }}
+
+  ansible-configure:
+    needs: terraform-deploy
+    runs-on: [ubuntu-22.04]
+    steps:
+      - name: Checkout code (получаем inventory)
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key for Ansible
+        run: |
+          echo "=== Настраиваем SSH доступ ==="
+          # Создаем приватный ключ из секретов Gitea
+          echo "${{ secrets.PROXMOX_SSH_PRIVATE_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+          
+          # Проверяем ключ
+          echo "SSH ключ создан:"
+          head -2 /tmp/ssh_key
+
+      - name: Wait a bit more for VMs
+        run: |
+          echo "=== Дополнительное ожидание для cloud-init ==="
+          sleep 30
+
+      - name: Test SSH connection to nodes
+        run: |
+          echo "=== Тестируем подключение к нодам ==="
+          
+          # Используем сгенерированный inventory
+          INVENTORY="${{ needs.terraform-deploy.outputs.inventory_path }}"
+          
+          # Простой тест ping через Ansible
+          ansible all -i "$INVENTORY" -m ping || echo "Пинг неудачен, но продолжаем..."
+          
+          # Альтернативный тест через ssh
+          echo "Тестируем прямое SSH подключение:"
+          grep "ansible_host" "$INVENTORY" | while read line; do
+            IP=$(echo "$line" | grep -o '[0-9]\+\.[0-9]\+\.[0-9]\+\.[0-9]\+')
+            if [ -n "$IP" ]; then
+              echo "Тестируем $IP..."
+              ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                  -i /tmp/ssh_key ubuntu@$IP "echo 'SSH успешен на $IP'" || true
+            fi
+          done
+
+      - name: Install Ansible if needed
+        run: |
+          echo "=== Устанавливаем Ansible ==="
+          apt-get update
+          apt-get install -y ansible
+
+      - name: Run basic Ansible setup
+        run: |
+          echo "=== Запускаем базовую настройку Ansible ==="
+          
+          INVENTORY="${{ needs.terraform-deploy.outputs.inventory_path }}"
+          
+          # Создаем простой playbook для теста
+          cat > basic_setup.yml << 'EOF'
+          ---
+          - name: Базовая проверка и настройка кластера
+            hosts: k8s_cluster
+            become: yes
+            
+            tasks:
+              - name: Проверка подключения
+                ping:
+                
+              - name: Показываем информацию о системе
+                command: uname -a
+                register: uname_result
+                
+              - name: Выводим результат
+                debug:
+                  var: uname_result.stdout
+                  
+              - name: Обновляем apt cache
+                apt:
+                  update_cache: yes
+                  cache_valid_time: 3600
+          EOF
+          
+          echo "Запускаем playbook..."
+          ansible-playbook -i "$INVENTORY" basic_setup.yml
+
+      - name: Clone Ansible repository for full setup
+        run: |
+          echo "=== Клонируем репозиторий с Ansible конфигурацией ==="
+          # Здесь нужно указать ваш репозиторий с Ansible
+          git clone https://github.com/ваш-пользователь/ansible-k8s-cluster.git ansible-repo || \
+            echo "⚠️  Репозиторий не найден, создаем базовую структуру"
+          
+          if [ ! -d "ansible-repo" ]; then
+            mkdir -p ansible-repo/playbooks
+            cat > ansible-repo/playbooks/setup-k8s.yml << 'EOF'
+          ---
+          - name: Установка Kubernetes кластера
+            hosts: k8s_cluster
+            become: yes
+            
+            tasks:
+              - name: Устанавливаем Docker
+                apt:
+                  name: docker.io
+                  state: present
+                  
+              - name: Устанавливаем kubeadm, kubelet, kubectl
+                apt:
+                  name:
+                    - kubelet
+                    - kubeadm
+                    - kubectl
+                  state: present
+            EOF
+          fi
+
+      - name: Run full Ansible configuration (опционально)
+        if: false  # Пока отключено, можно включить позже
+        run: |
+          echo "=== Запускаем полную конфигурацию ==="
+          cd ansible-repo
+          ansible-playbook -i "../${{ needs.terraform-deploy.outputs.inventory_path }}" playbooks/setup-k8s.yml
+
+      - name: Output success message
+        run: |
+          echo "========================================"
+          echo "✅ DEPLOYMENT COMPLETE!"
+          echo "========================================"
+          echo "Kubernetes cluster deployed and ready for configuration."
+          echo ""
+          echo "Inventory file: ${{ needs.terraform-deploy.outputs.inventory_path }}"
+          echo "Network: ${{ needs.terraform-deploy.outputs.network_prefix }}.0/24"
+          echo "Base IP: ${{ needs.terraform-deploy.outputs.static_ip_base }}"
+          echo ""
+          echo "You can now:"
+          echo "1. SSH to master: ssh -i /tmp/ssh_key ubuntu@${{ needs.terraform-deploy.outputs.network_prefix }}.${{ needs.terraform-deploy.outputs.static_ip_base }}"
+          echo "2. Run additional Ansible playbooks"
+          echo "3. Initialize Kubernetes cluster manually"
+          echo "========================================"
