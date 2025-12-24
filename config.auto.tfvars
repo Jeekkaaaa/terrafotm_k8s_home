@@ -7,8 +7,8 @@ template_vmid = 9001
 
 # Кластер
 cluster_config = {
-  masters_count = 1
-  workers_count = 2
+  masters_count = 0
+  workers_count = 3
   cluster_name  = "home-k8s-cluster"
   domain        = "home.lab"
 }
