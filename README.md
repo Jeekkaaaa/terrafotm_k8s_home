@@ -71,11 +71,29 @@ pveum token add terraform-token --user terraform-prov@pve --privsep 0
 
 Запишите:
 
-Token ID: terraform-prov@pve!terraform-token
+- Token ID: terraform-prov@pve!terraform-token
 
-Token Secret: сгенерированный UUID
+- Token Secret: сгенерированный UUID
 
 2. Создание SSH ключа
 
+```bash
+ssh-keygen -t ed25519 -f /root/.ssh/id_ed25519 -N "" -q
+cat /root/.ssh/id_ed25519.pub
+```
+🔐 Настройка секретов CI/CD
 
+Добавьте следующие 6 секретов в CI/CD систему (Gitea / GitHub / GitLab):
+
+```text
+Секрет	Описание	Пример
+PM_API_URL	URL Proxmox API	https://192.168.0.223:8006/api2/json
+PM_API_TOKEN_ID	ID API токена	terraform-prov@pve!terraform-token
+PM_API_TOKEN_SECRET	Secret API токена	xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+PROXMOX_SSH_USERNAME	SSH пользователь	root
+PROXMOX_SSH_PASSWORD	SSH пароль	ваш_пароль
+PROXMOX_SSH_PUBKEY	Публичный SSH-ключ	ssh-ed25519 AAAAC3...
+
+⚠️ Все 6 секретов обязательны
+```
 
