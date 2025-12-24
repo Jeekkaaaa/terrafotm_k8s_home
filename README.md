@@ -64,7 +64,7 @@ terrafotm_k8s_home/
 pveum user add terraform --password <ваш_пароль>
 pveum role add terraform -privs "VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.GuestAgent.Audit VM.GuestAgent.Unrestricted Sys.Audit VM.PowerMgmt Datastore.Allocate Datastore.Audit Datastore.AllocateSpace User.Modify Permissions.Modify SDN.Use SDN.Audit Pool.Allocate Pool.Audit Sys.Console Sys.Modify VM.Migrate"
 pveum aclmod / -user terraform -role TerraformProv
-pveum token add terraform-token --user terraform-prov@pve --privsep 0
+pveum token add terraform-token --user terraform-prov@pve --privsep 0```
 
 Запишите:
 
