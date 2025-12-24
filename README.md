@@ -1,4 +1,4 @@
-asdasd
+asdasdasd
 ## ⚙️ Настройка переменных
 
 ### 1. Создайте файл `terraform.tfvars`
