@@ -35,7 +35,7 @@ resource "terraform_data" "cleanup_old_template" {
   }
 }
 
-# 2. SSH команды для создания ПРАВИЛЬНОГО шаблона с Cloud-образом
+# 2. Создание шаблона с Cloud-образом
 resource "terraform_data" "create_proper_template" {
   depends_on = [terraform_data.cleanup_old_template]
 
@@ -55,7 +55,7 @@ resource "terraform_data" "create_proper_template" {
       "cd /var/lib/vz/template/iso/",
       "[ -f jammy-server-cloudimg-amd64.img ] || wget -q https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img",
       
-      "# 2. Создаем ВМ с Cloud-образом ПРАВИЛЬНО",
+      "# 2. Создаем ВМ с Cloud-образом",
       "qm create ${var.template_vmid} --name ubuntu-template --memory ${var.template_specs.memory_mb} --cores ${var.template_specs.cpu_cores} --net0 virtio,bridge=${var.network_config.bridge}",
       
       "# 3. Импортируем Cloud-образ",
@@ -69,31 +69,36 @@ resource "terraform_data" "create_proper_template" {
       "# 5. Настраиваем UEFI загрузку (решает проблему с загрузочным диском)",
       "qm set ${var.template_vmid} --bios ovmf",
       "qm set ${var.template_vmid} --machine pc-q35-8.1",
-      "qm set ${var.template_vmid} --efidisk0 ${var.storage_vm}:1,format=raw,efitype=4m",
+      "qm set ${var.template_vmid} --efidisk0 ${var.storage_vm}:1,format=raw,efitype=4m,pre-enrolled-keys=0",
       
-      "# 6. Настраиваем cloud-init",
+      "# 6. Настраиваем cloud-init с SSH ключом (ВАЖНО: правильно добавляем ключ)",
       "qm set ${var.template_vmid} --ide2 ${var.storage_vm}:cloudinit",
       "qm set ${var.template_vmid} --ciuser ${var.cloud_init.user}",
-      "echo '${var.ssh_public_key}' > /tmp/sshkey.txt",
-      "qm set ${var.template_vmid} --sshkeys /tmp/sshkey.txt",
-      "rm /tmp/sshkey.txt",
+      
+      "# 7. Добавляем SSH ключ ПРАВИЛЬНО - используем переменную напрямую",
+      "SSH_KEY=\"${replace(var.ssh_public_key, "\"", "\\\"")}\"",
+      "qm set ${var.template_vmid} --sshkeys \"$SSH_KEY\"",
+      
+      "# 8. Настройки сети",
       "qm set ${var.template_vmid} --ipconfig0 ip=dhcp",
       "qm set ${var.template_vmid} --nameserver '${join(" ", var.network_config.dns_servers)}'",
       "qm set ${var.template_vmid} --searchdomain '${var.cloud_init.search_domains[0]}'",
       
-      "# 7. Устанавливаем размер диска",
+      "# 9. Устанавливаем размер диска",
       "qm resize ${var.template_vmid} scsi0 ${var.template_specs.disk_size_gb}G",
       
-      "# 8. Конвертируем в шаблон",
+      "# 10. Конвертируем в шаблон",
       "qm template ${var.template_vmid}",
       
-      "# 9. Проверяем",
-      "qm config ${var.template_vmid} | grep -E '(scsi0|boot|template|bios|efidisk)'",
-      "echo '✅ Шаблон ${var.template_vmid} создан с UEFI загрузкой'"
+      "# 11. Проверяем что ключ добавлен",
+      "echo 'Проверяем SSH ключ в шаблоне:'",
+      "qm config ${var.template_vmid} | grep -A2 sshkeys",
+      
+      "echo '✅ Шаблон ${var.template_vmid} создан с UEFI загрузкой и SSH ключом'"
     ]
   }
 }
 
 output "template_ready" {
-  value = "Template ${var.template_vmid} created with UEFI boot"
+  value = "Template ${var.template_vmid} created with UEFI boot and SSH key"
 }

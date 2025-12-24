@@ -1,6 +1,6 @@
 # Основные
 target_node = "pve-k8s"
-ssh_public_key = ""
+# ssh_public_key УДАЛЕН - передается через секреты
 
 # Шаблон
 template_vmid = 9001
@@ -74,4 +74,3 @@ template_specs = {
 # Хранилища
 storage_iso = "local"      # Для образов ISO (тип Directory)
 storage_vm  = "local-lvm"  # Для дисков ВМ (тип LVM)
-

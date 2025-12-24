@@ -1,9 +1,41 @@
-variable "pm_api_url" { type = string }
-variable "pm_api_token_id" { type = string }
-variable "pm_api_token_secret" { type = string }
-variable "target_node" { type = string }
-variable "ssh_public_key_path" { type = string }
-variable "ssh_private_key_path" { type = string }
+variable "pm_api_url" { 
+  type = string 
+  sensitive = true
+}
+
+variable "pm_api_token_id" { 
+  type = string 
+  sensitive = true
+}
+
+variable "pm_api_token_secret" { 
+  type = string 
+  sensitive = true
+}
+
+variable "target_node" { 
+  type = string 
+}
+
+# SSH ключ для ВМ (передается через секреты)
+variable "ssh_public_key" {
+  type        = string
+  description = "SSH public key for VM access"
+}
+
+# SSH доступ к Proxmox (для провайдера)
+variable "proxmox_ssh_username" {
+  type        = string
+  description = "SSH username for Proxmox host"
+  default     = ""
+}
+
+variable "proxmox_ssh_password" {
+  type        = string
+  description = "SSH password for Proxmox host"
+  sensitive   = true
+  default     = ""
+}
 
 variable "cluster_config" {
   type = object({
@@ -70,14 +102,38 @@ variable "cloud_init" {
   })
 }
 
-variable "auto_static_ips" { type = bool }
-variable "static_ip_base" { type = number }
-variable "template_vmid" { type = number }
-variable "storage" { type = string }
-variable "bridge" { type = string }
+variable "static_ip_base" { 
+  type = number 
+}
+
+variable "template_vmid" { 
+  type = number 
+  default = 9001
+}
+
+# Хранилища
+variable "storage_iso" {
+  type        = string
+  description = "Storage for ISO images"
+}
+
+variable "storage_vm" {
+  type        = string
+  description = "Storage for VM disks"
+}
+
+# Устаревшие переменные (для обратной совместимости)
+variable "storage" { 
+  type    = string
+  default = ""
+}
+
+variable "bridge" { 
+  type    = string
+  default = ""
+}
 
 # Локальная переменная для префикса сети
 locals {
-  network_config = var.network_config
-  subnet_prefix  = split(".", local.network_config.subnet)[0]
+  subnet_prefix = split(".", var.network_config.subnet)[0]
 }
