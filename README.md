@@ -70,7 +70,7 @@ terrafotm_k8s_home/
 ## ⚙️ Предварительная настройка
 
 1. Создание API токена в Proxmox
-# На Proxmox хосте (192.168.0.ххх):
+На Proxmox хосте (192.168.0.ххх):
 ```pveum user add terraform --password <ваш_пароль>
 pveum role add terraform -privs "VM.Allocate VM.Audit VM.Clone VM.Config.CDROM VM.Config.CPU VM.Config.Cloudinit VM.Config.Disk VM.Config.Memory VM.Config.Network VM.Config.Options VM.Config.HWType VM.GuestAgent.Audit VM.GuestAgent.Unrestricted Sys.Audit VM.PowerMgmt Datastore.Allocate Datastore.Audit Datastore.AllocateSpace User.Modify Permissions.Modify SDN.Use SDN.Audit Pool.Allocate Pool.Audit Sys.Console Sys.Modify VM.Migrate"
 pveum aclmod / -user terraform -role TerraformProv
@@ -91,7 +91,7 @@ cat /root/.ssh/id_ed25519.pub
 ```
 ---
 
-🔐 Настройка секретов CI/CD
+## 🔐 Настройка секретов CI/CD
 
 Добавьте следующие 6 секретов в CI/CD систему (Gitea / GitHub / GitLab):
 
@@ -114,7 +114,7 @@ PROXMOX_SSH_PUBKEY	Публичный SSH-ключ	ssh-ed25519 AAAAC3...
 ```
 ---
 
-🛠️ Конфигурационный файл
+## 🛠️ Конфигурационный файл
 
 config.auto.tfvars — единый файл управления
 
@@ -180,7 +180,7 @@ static_ip_base = 100
 ```
 ---
 
-🚀 Использование
+## 🚀 Использование
 
 Автоматический деплой (рекомендуется)
 
@@ -190,7 +190,8 @@ git add .
 git commit -m "Обновление кластера"
 git push origin main
 ```
-🔧 Устранение неполадок
+## 🔧 Устранение неполадок
+
 ❌ Ошибка: got: = при деплое
 Причина: Пустые секреты PM_API_TOKEN_ID или PM_API_TOKEN_SECRET
 Решение: Проверьте все 6 секретов в CI/CD системе
@@ -212,7 +213,8 @@ ssh -o StrictHostKeyChecking=no ubuntu@<IP_адрес>
 
 ---
 
-🔄 Workflow процесс
+## 🔄 Workflow процесс 
+
 При каждом push в main ветку:
 
 1. ✅ Checkout code — загрузка репозитория
@@ -229,7 +231,7 @@ ssh -o StrictHostKeyChecking=no ubuntu@<IP_адрес>
 
 ---
 
-📊 Примеры конфигураций
+## 📊 Примеры конфигураций
 
 Только workers (без master)
 ```hcl
@@ -260,7 +262,7 @@ cluster_config = {
 ```
 ---
 
-🔐 Безопасность
+## 🔐 Безопасность
 
 1. API токены — отдельный пользователь с минимальными правами
 
@@ -272,7 +274,7 @@ cluster_config = {
 
 ---
 
-📞 Поддержка
+## 📞 Поддержка
 
 1. ✅ Все 6 секретов установлены и не пустые
 
@@ -292,7 +294,7 @@ cluster_config = {
 
 ---
 
-🎯 Быстрый старт
+## 🎯 Быстрый старт
 
 1. Настройте Proxmox API токен
 
