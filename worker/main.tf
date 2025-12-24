@@ -18,7 +18,6 @@ provider "proxmox" {
   }
 }
 
-# Локальные вычисления - ИСПРАВЛЕННЫЙ РАСЧЕТ IP
 locals {
   subnet_parts = split(".", var.network_config.subnet)
   network_prefix = "${local.subnet_parts[0]}.${local.subnet_parts[1]}.${local.subnet_parts[2]}"
@@ -34,8 +33,8 @@ resource "proxmox_virtual_environment_vm" "k8s_worker" {
   name      = "k8s-worker-${var.vmid_ranges.workers.start + count.index}"
   node_name = var.target_node
   vm_id     = var.vmid_ranges.workers.start + count.index
-  
-  # КЛОНИРУЕМ ИЗ ШАБЛОНА
+  started   = false  # ВЫКЛЮЧЕННАЯ
+
   clone {
     vm_id = var.template_vmid
     node_name = var.target_node
@@ -54,7 +53,6 @@ resource "proxmox_virtual_environment_vm" "k8s_worker" {
   disk {
     datastore_id = var.vm_specs.worker.disk_storage
     size         = var.vm_specs.worker.disk_size_gb
-    iothread     = var.vm_specs.worker.disk_iothread
     interface    = "scsi0"
   }
 
@@ -85,13 +83,14 @@ resource "proxmox_virtual_environment_vm" "k8s_worker" {
   }
 
   agent {
-    enabled = true
-    type    = "virtio"
+    enabled = false
   }
 
   boot_order = ["scsi0"]
   scsi_hardware = "virtio-scsi-pci"
   on_boot = true
+
+  timeout_create = 180
 
   lifecycle {
     ignore_changes = [

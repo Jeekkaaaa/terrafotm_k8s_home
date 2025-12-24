@@ -18,9 +18,7 @@ provider "proxmox" {
   }
 }
 
-# Локальные вычисления - ИСПРАВЛЕННЫЙ РАСЧЕТ IP
 locals {
-  # Получаем первые 3 октета подсети (192.168.0)
   subnet_parts = split(".", var.network_config.subnet)
   network_prefix = "${local.subnet_parts[0]}.${local.subnet_parts[1]}.${local.subnet_parts[2]}"
   master_ip     = "${local.network_prefix}.${var.static_ip_base}"
@@ -30,10 +28,11 @@ resource "proxmox_virtual_environment_vm" "k8s_master" {
   name      = "k8s-master-${var.vmid_ranges.masters.start}"
   node_name = var.target_node
   vm_id     = var.vmid_ranges.masters.start
-  
+  started   = false  # ВЫКЛЮЧЕННАЯ
+
   # КЛОНИРУЕМ ИЗ ШАБЛОНА
   clone {
-    vm_id = var.template_vmid  # ID вашего шаблона (9001)
+    vm_id = var.template_vmid
     node_name = var.target_node
     full = true
   }
@@ -47,15 +46,14 @@ resource "proxmox_virtual_environment_vm" "k8s_master" {
     dedicated = var.vm_specs.master.memory_mb
   }
 
-  # НАСТРОЙКА ДИСКА (после клонирования)
+  # Диск (после клонирования увеличиваем если нужно)
   disk {
     datastore_id = var.vm_specs.master.disk_storage
     size         = var.vm_specs.master.disk_size_gb
-    iothread     = var.vm_specs.master.disk_iothread
     interface    = "scsi0"
   }
 
-  # CLOUD-INIT КОНФИГУРАЦИЯ
+  # Cloud-init с нашими настройками
   initialization {
     datastore_id = var.vm_specs.master.cloudinit_storage
 
@@ -83,13 +81,14 @@ resource "proxmox_virtual_environment_vm" "k8s_master" {
   }
 
   agent {
-    enabled = true
-    type    = "virtio"
+    enabled = false  # Отключаем для скорости
   }
 
   boot_order = ["scsi0"]
   scsi_hardware = "virtio-scsi-pci"
   on_boot = true
+
+  timeout_create = 180  # 3 минуты на клонирование
 
   lifecycle {
     ignore_changes = [
@@ -101,8 +100,4 @@ resource "proxmox_virtual_environment_vm" "k8s_master" {
 
 output "master_ip" {
   value = local.master_ip
-}
-
-output "master_ready" {
-  value = "Master node ${var.vmid_ranges.masters.start} создан с IP ${local.master_ip}"
 }
