@@ -1,4 +1,5 @@
-variable "pm_api_url" {
+# УДАЛЯЕМ ВСЕ строки связанные с SSH из config.auto.tfvars
+variable "pm_api_url" {# Proxmox API (передаются че
   type = string
 }
 
@@ -10,11 +11,49 @@ variable "pm_api_token_secret" {
   type = string
 }
 
+# Основные
 variable "target_node" {
-  type    = string
-  default = "pve-k8s"
+  type = string
 }
 
+variable "ssh_public_key" {
+  type = string
+}
+
+variable "storage" {
+  type = string
+}
+
+variable "bridge" {
+  type = string
+}
+
+# Шаблон
+variable "template_vmid" {
+  type = number
+}
+
+variable "template_specs" {
+  type = object({
+    cpu_cores     = number
+    cpu_sockets   = number
+    memory_mb     = number
+    disk_size_gb  = number
+    disk_iothread = bool
+  })
+}
+
+# Кластер
+variable "cluster_config" {
+  type = object({
+    masters_count = number
+    workers_count = number
+    cluster_name  = string
+    domain        = string
+  })
+}
+
+# VM ID
 variable "vmid_ranges" {
   type = object({
     masters = object({ start = number, end = number })
@@ -22,6 +61,7 @@ variable "vmid_ranges" {
   })
 }
 
+# Спецификации VM
 variable "vm_specs" {
   type = object({
     master = object({
@@ -33,25 +73,19 @@ variable "vm_specs" {
       disk_iothread     = bool
       cloudinit_storage = string
     })
+    worker = object({
+      cpu_cores         = number
+      cpu_sockets       = number
+      memory_mb         = number
+      disk_size_gb      = number
+      disk_storage      = string
+      disk_iothread     = bool
+      cloudinit_storage = string
+    })
   })
 }
 
-variable "cluster_config" {
-  type = object({
-    masters_count = number
-    workers_count = number
-    cluster_name  = string
-    domain        = string
-  })
-}
-
-variable "cloud_init" {
-  type = object({
-    user           = string
-    search_domains = list(string)
-  })
-}
-
+# Сеть
 variable "network_config" {
   type = object({
     subnet       = string
@@ -61,22 +95,25 @@ variable "network_config" {
   })
 }
 
+# Cloud-init
+variable "cloud_init" {
+  type = object({
+    user           = string
+    search_domains = list(string)
+  })
+}
+
+# IP
 variable "static_ip_base" {
   type = number
 }
 
-variable "ssh_public_key" {
+variable "storage_iso" {
   type = string
 }
 
-variable "storage" {
-  type    = string
-  default = "local-lvm"
-}
-
-variable "bridge" {
-  type    = string
-  default = "vmbr0"
+variable "storage_vm" {
+  type = string
 }
 
 variable "proxmox_ssh_username" {
@@ -90,43 +127,4 @@ variable "proxmox_ssh_password" {
   description = "Пароль пользователя для SSH подключения к хосту Proxmox"
   sensitive   = true
   default     = ""
-}
-
-# Переменные для клонирования из шаблона
-variable "template_vmid" {
-  type        = number
-  description = "VM ID шаблона для клонирования"
-}
-
-variable "template_specs" {
-  type = object({
-    cpu_cores     = number
-    cpu_sockets   = number
-    memory_mb     = number
-    disk_size_gb  = number
-    disk_iothread = bool
-  })
-  description = "Характеристики шаблона"
-}
-
-# Добавляем ВСЕ переменные которые есть в config.auto.tfvars
-variable "storage_vm" {
-  type        = string
-  description = "Хранилище для дисков ВМ"
-}
-
-variable "storage_iso" {
-  type        = string
-  description = "Хранилище для ISO образов"
-}
-
-variable "template_specs" {
-  type = object({
-    cpu_cores     = number
-    cpu_sockets   = number
-    memory_mb     = number
-    disk_size_gb  = number
-    disk_iothread = bool
-  })
-  description = "Характеристики шаблона"
 }
