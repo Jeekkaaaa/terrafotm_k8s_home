@@ -91,3 +91,20 @@ variable "proxmox_ssh_password" {
   sensitive   = true
   default     = ""
 }
+
+# Переменные для клонирования из шаблона
+variable "template_vmid" {
+  type        = number
+  description = "VM ID шаблона для клонирования"
+}
+
+variable "template_specs" {
+  type = object({
+    cpu_cores     = number
+    cpu_sockets   = number
+    memory_mb     = number
+    disk_size_gb  = number
+    disk_iothread = bool
+  })
+  description = "Характеристики шаблона"
+}
