@@ -1,14 +1,13 @@
 # Основные
 target_node = "pve-k8s"
-# ssh_public_key УДАЛЕН - передается через секреты
 
 # Шаблон
 template_vmid = 9001
 
 # Кластер
 cluster_config = {
-  masters_count = 0
-  workers_count = 3
+  masters_count = 2
+  workers_count = 1
   cluster_name  = "home-k8s-cluster"
   domain        = "home.lab"
 }
