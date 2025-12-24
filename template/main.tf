@@ -66,17 +66,17 @@ resource "terraform_data" "create_proper_template" {
       "qm set ${var.template_vmid} --boot order=scsi0",
       "qm set ${var.template_vmid} --scsihw virtio-scsi-pci",
       
-      "# 5. Настраиваем UEFI загрузку (решает проблему с загрузочным диском)",
+      "# 5. Настраиваем UEFI загрузку",
       "qm set ${var.template_vmid} --bios ovmf",
       "qm set ${var.template_vmid} --machine pc-q35-8.1",
       "qm set ${var.template_vmid} --efidisk0 ${var.storage_vm}:1,format=raw,efitype=4m,pre-enrolled-keys=0",
       
-      "# 6. Настраиваем cloud-init с SSH ключом (ВАЖНО: правильно добавляем ключ)",
+      "# 6. Настраиваем cloud-init",
       "qm set ${var.template_vmid} --ide2 ${var.storage_vm}:cloudinit",
       "qm set ${var.template_vmid} --ciuser ${var.cloud_init.user}",
       
-      "# 7. Добавляем SSH ключ - самый простой и надежный способ через временный файл
-      echo '${var.ssh_public_key}' > /tmp/ssh_key_${var.template_vmid}.txt",
+      "# 7. Добавляем SSH ключ через временный файл",
+      "echo '${var.ssh_public_key}' > /tmp/ssh_key_${var.template_vmid}.txt",
       "qm set ${var.template_vmid} --sshkeys /tmp/ssh_key_${var.template_vmid}.txt",
       "rm -f /tmp/ssh_key_${var.template_vmid}.txt",
       
