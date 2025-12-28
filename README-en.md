@@ -24,12 +24,12 @@
 
 ## 🎯 Main features
 
-✅ **Full automation** — from template to working cluster  
-✅ **UEFI** — modern loading of all virtual machines
-✅ **Auto selection IP** — smart search for available addresses 
-✅ **Flexible configurationя** — setting the number of nodes via one file
-✅ **CI/CD integration** — deployment via push in Git
-✅ **Security** — SSH keys via secrets, API tokens  
+✅ **Full automation** — from template to working cluster    
+✅ **UEFI** — modern loading of all virtual machines    
+✅ **Auto selection IP** — smart search for available addresses    
+✅ **Flexible configurationя** — setting the number of nodes via one file    
+✅ **CI/CD integration** — deployment via push in Git    
+✅ **Security** — SSH keys via secrets, API tokens    
 
 ---
 
