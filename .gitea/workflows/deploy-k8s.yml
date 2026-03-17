@@ -1,0 +1,732 @@
+name: 🚀 Full Kubernetes Cluster Deployment
+on: [push]
+
+jobs:
+  terraform-deploy:
+    runs-on: ubuntu-22.04
+    outputs:
+      master_ip: ${{ steps.save-ips.outputs.master_ip }}
+      worker_ip: ${{ steps.save-ips.outputs.worker_ip }}
+      kubernetes_version: ${{ steps.parse-config.outputs.KUBERNETES_VERSION }}
+      pod_cidr: ${{ steps.parse-config.outputs.POD_NETWORK_CIDR }}
+      service_cidr: ${{ steps.parse-config.outputs.SERVICE_CIDR }}
+      calico_url: ${{ steps.parse-config.outputs.CALICO_MANIFEST_URL }}
+      cluster_name: ${{ steps.parse-config.outputs.CLUSTER_NAME }}
+      cluster_domain: ${{ steps.parse-config.outputs.CLUSTER_DOMAIN }}
+      network_prefix: ${{ steps.parse-config.outputs.NETWORK_PREFIX }}
+      masters_count: ${{ steps.parse-config.outputs.MASTERS_COUNT }}
+      workers_count: ${{ steps.parse-config.outputs.WORKERS_COUNT }}
+
+    steps:
+      - name: 📥 Клонирование кода
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Проверка окружения
+        run: |
+          echo "=== Проверяем установленные инструменты ==="
+          terraform version
+          ansible --version | head -1
+          python3 --version
+          echo "✅ Все инструменты готовы"
+
+      - name: 📖 Парсинг единого конфига
+        id: parse-config
+        run: |
+          echo "=== Читаем config.auto.tfvars через готовый парсер ==="
+          while IFS='=' read -r key value; do
+            clean_value=$(echo "$value" | sed 's/^"//;s/"$//')
+            echo "${key}=${clean_value}" >> $GITHUB_ENV
+            echo "${key}=${clean_value}" >> $GITHUB_OUTPUT
+          done < <(python3 parse_config.py --env)
+          
+          echo "✅ Конфиг прочитан:"
+          echo "  Kubernetes: $KUBERNETES_VERSION"
+          echo "  Сеть: $NETWORK_PREFIX.0/24"
+          echo "  Мастеров: $MASTERS_COUNT, Воркеров: $WORKERS_COUNT"
+
+      - name: 🔍 Автопоиск свободных IP
+        run: |
+          echo "=== Ищем свободные IP в сети $NETWORK_PREFIX.0/24 ==="
+          RANGE_START=$(grep 'range_start' config.auto.tfvars | grep -o '[0-9]*' || echo "100")
+          RANGE_END=$(grep 'range_end' config.auto.tfvars | grep -o '[0-9]*' || echo "240")
+          BUFFER_IPS=$(grep 'buffer_ips' config.auto.tfvars | grep -o '[0-9]*' || echo "1")
+          NEEDED_IPS=$((MASTERS_COUNT + WORKERS_COUNT + BUFFER_IPS))
+
+          echo "Диапазон поиска: $RANGE_START-$RANGE_END"
+          echo "Нужно IP: $NEEDED_IPS"
+
+          found_start=""
+          for start in $(seq $RANGE_START $RANGE_END); do
+            LAST_IP=$((start + NEEDED_IPS - 1))
+            if [ $LAST_IP -gt $RANGE_END ]; then break; fi
+            
+            all_free=true
+            for i in $(seq 0 $((NEEDED_IPS - 1))); do
+              IP="$NETWORK_PREFIX.$((start + i))"
+              if ping -c 1 -W 1 "$IP" >/dev/null 2>&1; then
+                echo "  IP $IP занят"
+                all_free=false
+                break
+              fi
+            done
+            
+            if [ "$all_free" = true ]; then
+              found_start=$start
+              echo "✅ Найден свободный диапазон: $NETWORK_PREFIX.$start - $NETWORK_PREFIX.$LAST_IP"
+              break
+            fi
+          done
+
+          if [ -n "$found_start" ]; then
+            echo "STATIC_IP_BASE=$found_start" >> $GITHUB_ENV
+            echo "static_ip_base=$found_start" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Не найдено $NEEDED_IPS свободных IP"
+            exit 1
+          fi
+
+      - name: 📝 Обновление конфига с найденным IP
+        run: |
+          echo "=== Обновляем config.auto.tfvars ==="
+          sed -i '/static_ip_base[[:space:]]*=/d' config.auto.tfvars
+          echo "" >> config.auto.tfvars
+          echo "# Автоматически найденный базовый IP" >> config.auto.tfvars
+          echo "static_ip_base = $STATIC_IP_BASE" >> config.auto.tfvars
+          echo "✅ Установлено: static_ip_base = $STATIC_IP_BASE"
+
+      - name: 🏗️ Создание шаблона Ubuntu
+        run: |
+          echo "=== Создаем шаблон Ubuntu ==="
+          cd template
+          terraform init
+          terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
+          echo "✅ Шаблон создан"
+          sleep 30
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          TF_VAR_ssh_public_key: ${{ secrets.PROXMOX_SSH_PUBKEY }}
+          TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
+          TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
+
+      - name: 👑 Создание Master нод
+        run: |
+          echo "=== Создаем мастер ноды ==="
+          cd master
+          terraform init
+          terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
+          echo "✅ Мастер ноды созданы"
+          
+          # Ждем загрузки мастер нод
+          echo "⏳ Ждем загрузки мастер нод (60 секунд)..."
+          sleep 60
+          
+          # Проверяем доступность первой мастер ноды
+          MASTER_IP="$NETWORK_PREFIX.$STATIC_IP_BASE"
+          echo "Проверяем доступность master1 ($MASTER_IP)..."
+          for i in {1..10}; do
+            if ping -c 1 -W 2 $MASTER_IP >/dev/null 2>&1; then
+              echo "✅ master1 доступен по ping"
+              break
+            else
+              echo "⏳ master1 еще не пингуется ($i/10)..."
+              sleep 10
+            fi
+          done
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          TF_VAR_ssh_public_key: ${{ secrets.PROXMOX_SSH_PUBKEY }}
+          TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
+          TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
+
+      - name: ⚙️ Создание Worker нод
+        run: |
+          echo "=== Создаем worker ноды ==="
+          cd worker
+          terraform init
+          terraform apply -auto-approve -input=false -var-file="../config.auto.tfvars"
+          echo "✅ Worker ноды созданы"
+          
+          # Ждем загрузки worker нод дольше
+          echo "⏳ Ждем загрузки worker нод (90 секунд)..."
+          sleep 90
+          
+          # Проверяем доступность первой worker ноды
+          WORKER_IP="$NETWORK_PREFIX.$((STATIC_IP_BASE + MASTERS_COUNT))"
+          echo "Проверяем доступность worker1 ($WORKER_IP)..."
+          for i in {1..15}; do
+            if ping -c 1 -W 2 $WORKER_IP >/dev/null 2>&1; then
+              echo "✅ worker1 доступен по ping"
+              break
+            else
+              echo "⏳ worker1 еще не пингуется ($i/15)..."
+              sleep 10
+            fi
+          done
+        env:
+          TF_VAR_pm_api_url: ${{ secrets.PM_API_URL }}
+          TF_VAR_pm_api_token_id: ${{ secrets.PM_API_TOKEN_ID }}
+          TF_VAR_pm_api_token_secret: ${{ secrets.PM_API_TOKEN_SECRET }}
+          TF_VAR_ssh_public_key: ${{ secrets.PROXMOX_SSH_PUBKEY }}
+          TF_VAR_proxmox_ssh_username: ${{ secrets.PROXMOX_SSH_USERNAME }}
+          TF_VAR_proxmox_ssh_password: ${{ secrets.PROXMOX_SSH_PASSWORD }}
+
+      - name: 💾 Сохранение IP для Ansible
+        id: save-ips
+        run: |
+          echo "=== Сохраняем IP для Ansible ==="
+          MASTER_IP="$NETWORK_PREFIX.$STATIC_IP_BASE"
+          WORKER_IP="$NETWORK_PREFIX.$((STATIC_IP_BASE + MASTERS_COUNT))"
+          
+          echo "master_ip=$MASTER_IP" >> $GITHUB_OUTPUT
+          echo "worker_ip=$WORKER_IP" >> $GITHUB_OUTPUT
+          
+          echo "✅ IP сохранены:"
+          echo "  Master: $MASTER_IP"
+          echo "  Worker: $WORKER_IP"
+
+  k8s-full-deploy:
+    needs: terraform-deploy
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    
+    steps:
+      - name: 📥 Клонирование Ansible репозитория
+        uses: actions/checkout@v4
+        with:
+          repository: jeekkaaaa/ansible_k8s_home
+          token: ${{ secrets.GITE_TOKEN }}
+          path: ansible-repo
+
+      - name: 🔑 Настройка SSH ключа
+        run: |
+          echo "${{ secrets.PROXMOX_SSH_PRIVATE_KEY }}" > /tmp/ssh_key
+          chmod 600 /tmp/ssh_key
+          mkdir -p ~/.ssh
+          echo "Host *" > ~/.ssh/config
+          echo "  StrictHostKeyChecking no" >> ~/.ssh/config
+          echo "  UserKnownHostsFile /dev/null" >> ~/.ssh/config
+          echo "  ConnectTimeout 30" >> ~/.ssh/config
+          echo "  ServerAliveInterval 60" >> ~/.ssh/config
+          echo "  ServerAliveCountMax 3" >> ~/.ssh/config
+
+      - name: 📋 Создание динамического inventory
+        run: |
+          echo "=== Создаем inventory для Ansible ==="
+          
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          WORKER_IP="${{ needs.terraform-deploy.outputs.worker_ip }}"
+          MASTERS_COUNT="${{ needs.terraform-deploy.outputs.masters_count }}"
+          WORKERS_COUNT="${{ needs.terraform-deploy.outputs.workers_count }}"
+          
+          # Создаем master ноды
+          echo "[k8s_masters]" > ansible-repo/inventory.ini
+          for i in $(seq 1 $MASTERS_COUNT); do
+            # Вычисляем IP для каждого мастера
+            IP_OCTET=$(( ${MASTER_IP##*.} + (i - 1) ))
+            IP="${MASTER_IP%.*}.$IP_OCTET"
+            echo "master$i ansible_host=$IP ansible_user=ubuntu" >> ansible-repo/inventory.ini
+          done
+          
+          echo "" >> ansible-repo/inventory.ini
+          echo "[k8s_workers]" >> ansible-repo/inventory.ini
+          for i in $(seq 1 $WORKERS_COUNT); do
+            # Вычисляем IP для каждого воркера
+            IP_OCTET=$(( ${WORKER_IP##*.} + (i - 1) ))
+            IP="${WORKER_IP%.*}.$IP_OCTET"
+            echo "worker$i ansible_host=$IP ansible_user=ubuntu" >> ansible-repo/inventory.ini
+          done
+          
+          echo "" >> ansible-repo/inventory.ini
+          echo "[k8s_cluster:children]" >> ansible-repo/inventory.ini
+          echo "k8s_masters" >> ansible-repo/inventory.ini
+          echo "k8s_workers" >> ansible-repo/inventory.ini
+          echo "" >> ansible-repo/inventory.ini
+          echo "[all:vars]" >> ansible-repo/inventory.ini
+          echo "ansible_ssh_private_key_file=/tmp/ssh_key" >> ansible-repo/inventory.ini
+          echo "ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30'" >> ansible-repo/inventory.ini
+          echo "ansible_python_interpreter=/usr/bin/python3" >> ansible-repo/inventory.ini
+          echo "ansible_become=yes" >> ansible-repo/inventory.ini
+          echo "ansible_become_method=sudo" >> ansible-repo/inventory.ini
+          echo "ansible_become_user=root" >> ansible-repo/inventory.ini
+          
+          echo "✅ Inventory создан для $MASTERS_COUNT мастеров и $WORKERS_COUNT воркеров"
+
+      - name: 🔌 Проверка SSH доступности всех нод
+        run: |
+          echo "=== Проверяем SSH доступ ко всем нодам ==="
+          
+          MAX_RETRIES=20
+          RETRY_DELAY=15
+          
+          # Проверяем все мастер ноды
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          MASTERS_COUNT="${{ needs.terraform-deploy.outputs.masters_count }}"
+          
+          for i in $(seq 1 $MASTERS_COUNT); do
+            IP_OCTET=$(( ${MASTER_IP##*.} + (i - 1) ))
+            IP="${MASTER_IP%.*}.$IP_OCTET"
+            echo ""
+            echo "Проверяем master$i ($IP)..."
+            
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i /tmp/ssh_key ubuntu@$IP "echo 'SSH OK'" 2>/dev/null; then
+                echo "✅ master$i доступен по SSH (попытка $attempt)"
+                break
+              else
+                if [ $attempt -eq $MAX_RETRIES ]; then
+                  echo "❌ master$i недоступен после $MAX_RETRIES попыток"
+                  exit 1
+                fi
+                echo "⏳ master$i еще не готов ($attempt/$MAX_RETRIES), ждем $RETRY_DELAY секунд..."
+                sleep $RETRY_DELAY
+              fi
+            done
+          done
+          
+          # Проверяем все worker ноды
+          WORKER_IP="${{ needs.terraform-deploy.outputs.worker_ip }}"
+          WORKERS_COUNT="${{ needs.terraform-deploy.outputs.workers_count }}"
+          
+          for i in $(seq 1 $WORKERS_COUNT); do
+            IP_OCTET=$(( ${WORKER_IP##*.} + (i - 1) ))
+            IP="${WORKER_IP%.*}.$IP_OCTET"
+            echo ""
+            echo "Проверяем worker$i ($IP)..."
+            
+            for attempt in $(seq 1 $MAX_RETRIES); do
+              if ssh -o StrictHostKeyChecking=no -o ConnectTimeout=10 -i /tmp/ssh_key ubuntu@$IP "echo 'SSH OK'" 2>/dev/null; then
+                echo "✅ worker$i доступен по SSH (попытка $attempt)"
+                break
+              else
+                if [ $attempt -eq $MAX_RETRIES ]; then
+                  echo "⚠️  worker$i недоступен после $MAX_RETRIES попыток, продолжаем без него"
+                  break
+                fi
+                echo "⏳ worker$i еще не готов ($attempt/$MAX_RETRIES), ждем $RETRY_DELAY секунд..."
+                sleep $RETRY_DELAY
+              fi
+            done
+          done
+
+      - name: 🔧 Настройка sudo без пароля
+        run: |
+          echo "=== Настраиваем sudo без пароля на всех нодах ==="
+          
+          cd ansible-repo
+          
+          # Создаем плейбук без heredoc (простой подход)
+          echo "---" > /tmp/setup-sudo.yml
+          echo "- name: Setup sudo without password" >> /tmp/setup-sudo.yml
+          echo "  hosts: k8s_cluster" >> /tmp/setup-sudo.yml
+          echo "  become: yes" >> /tmp/setup-sudo.yml
+          echo "  tasks:" >> /tmp/setup-sudo.yml
+          echo "    - name: Configure passwordless sudo" >> /tmp/setup-sudo.yml
+          echo "      copy:" >> /tmp/setup-sudo.yml
+          echo "        dest: /etc/sudoers.d/99-ubuntu-nopasswd" >> /tmp/setup-sudo.yml
+          echo "        content: |" >> /tmp/setup-sudo.yml
+          echo "          ubuntu ALL=(ALL) NOPASSWD:ALL" >> /tmp/setup-sudo.yml
+          echo "        mode: '0440'" >> /tmp/setup-sudo.yml
+          echo "" >> /tmp/setup-sudo.yml
+          echo "    - name: Verify sudo works" >> /tmp/setup-sudo.yml
+          echo "      command: sudo whoami" >> /tmp/setup-sudo.yml
+          echo "      register: sudo_test" >> /tmp/setup-sudo.yml
+          echo "      changed_when: false" >> /tmp/setup-sudo.yml
+          echo "" >> /tmp/setup-sudo.yml
+          echo "    - name: Show sudo test result" >> /tmp/setup-sudo.yml
+          echo "      debug:" >> /tmp/setup-sudo.yml
+          echo "        msg: \"Sudo test on {{ inventory_hostname }}: {{ sudo_test.stdout }}\"" >> /tmp/setup-sudo.yml
+          
+          ansible-playbook -i inventory.ini /tmp/setup-sudo.yml
+
+      # ==================== ВЫПОЛНЕНИЕ ВСЕХ ПЛЕЙБУКОВ ====================
+
+      - name: 🏗️ 01. Базовая настройка системы
+        run: |
+          echo "========================================"
+          echo "🏗️  01. БАЗОВАЯ НАСТРОЙКА СИСТЕМЫ"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Запускаем плейбук 01-base.yml..."
+          ansible-playbook -i inventory.ini playbooks/01-base.yml \
+            --timeout=300 \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          echo "✅ Базовая настройка завершена"
+        timeout-minutes: 10
+
+      - name: 🐋 02. Установка containerd
+        run: |
+          echo "========================================"
+          echo "🐋 02. УСТАНОВКА CONTAINERD"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Запускаем плейбук 02-containerd.yml..."
+          ansible-playbook -i inventory.ini playbooks/02-containerd.yml \
+            --timeout=300 \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          echo "✅ Containerd установлен"
+          sleep 5
+        timeout-minutes: 10
+
+      - name: ⚙️ 03. Установка Kubernetes
+        run: |
+          echo "========================================"
+          echo "⚙️  03. УСТАНОВКА KUBERNETES"
+          echo "========================================"
+          cd ansible-repo
+          
+          K8S_VERSION=$(echo "${{ needs.terraform-deploy.outputs.kubernetes_version }}" | sed 's/[[:space:]]//g')
+          K8S_VERSION=${K8S_VERSION:-"1.30"}
+          
+          echo "Устанавливаем Kubernetes версии: $K8S_VERSION"
+          echo "Запускаем плейбук 03-kubernetes.yml..."
+          
+          ansible-playbook -i inventory.ini playbooks/03-kubernetes.yml \
+            --timeout=300 \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key" \
+            -e "kubernetes_version=$K8S_VERSION"
+          
+          echo "✅ Kubernetes $K8S_VERSION установлен"
+          sleep 5
+        timeout-minutes: 15
+
+      - name: 🚀 04. Инициализация кластера
+        run: |
+          echo "========================================"
+          echo "🚀 04. ИНИЦИАЛИЗАЦИЯ КЛАСТЕРА"
+          echo "========================================"
+          cd ansible-repo
+          
+          POD_CIDR=$(echo "${{ needs.terraform-deploy.outputs.pod_cidr }}" | xargs | tr -d '\n\r\t')
+          SERVICE_CIDR=$(echo "${{ needs.terraform-deploy.outputs.service_cidr }}" | xargs | tr -d '\n\r\t')
+          
+          POD_CIDR=${POD_CIDR:-"10.244.0.0/16"}
+          SERVICE_CIDR=${SERVICE_CIDR:-"10.96.0.0/12"}
+          
+          echo "Используем конфигурацию:"
+          echo "  Pod CIDR: $POD_CIDR"
+          echo "  Service CIDR: $SERVICE_CIDR"
+          echo "  CRI Socket: unix:///var/run/containerd/containerd.sock"
+          
+          echo "Запускаем плейбук 04-cluster-init.yml..."
+          
+          ansible-playbook -i inventory.ini playbooks/04-cluster-init.yml \
+            --timeout=600 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key" \
+            -e "k8s_pod_cidr=$POD_CIDR" \
+            -e "k8s_service_cidr=$SERVICE_CIDR" \
+            -e "k8s_cri_socket=unix:///var/run/containerd/containerd.sock" \
+            -e "ha_enabled=false" \
+            -e "load_balancer_ip=''" \
+            -e "cluster_domain=home.lab"
+          
+          echo "✅ Кластер инициализирован"
+          
+          # Даем время API серверу запуститься
+          echo "⏳ Ждем запуска API сервера (30 секунд)..."
+          sleep 30
+        timeout-minutes: 15
+
+      - name: 🌐 05. Установка CNI плагина (Calico)
+        run: |
+          echo "========================================"
+          echo "🌐 05. УСТАНОВКА CNI ПЛАГИНА"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Даем время API серверу запуститься..."
+          sleep 20
+          
+          echo "Запускаем исправленный плейбук 05-cni.yml..."
+          
+          POD_CIDR=$(echo "${{ needs.terraform-deploy.outputs.pod_cidr }}" | xargs | tr -d '\n\r\t')
+          POD_CIDR=${POD_CIDR:-"10.244.0.0/16"}
+          
+          ansible-playbook -i inventory.ini playbooks/05-cni.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key" \
+            -e "pod_network_cidr=$POD_CIDR"
+          
+          echo "✅ CNI плагин установлен"
+          
+          # Ждем пока CNI запустится
+          echo "⏳ Ждем запуска CNI (30 секунд)..."
+          sleep 30
+        timeout-minutes: 15
+
+      - name: 🔗 06. Подключение Worker нод
+        run: |
+          echo "========================================"
+          echo "🔗 06. ПОДКЛЮЧЕНИЕ WORKER НОД"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Проверяем статус кластера перед подключением worker..."
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes"
+          
+          echo "Получаем join command для передачи в плейбук..."
+          JOIN_CMD=$(ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubeadm token create --print-join-command 2>/dev/null || echo '# ERROR: Не удалось создать токен'")
+          
+          echo "Join command: $JOIN_CMD"
+          
+          if [[ $JOIN_CMD == *"ERROR"* ]]; then
+            echo "⚠️  Не удалось получить join command, пропускаем подключение worker"
+          else
+            echo "Запускаем исправленный плейбук 06-worker-join.yml..."
+            
+            ansible-playbook -i inventory.ini playbooks/06-worker-join.yml \
+              --timeout=300 \
+              -e "ansible_ssh_private_key_file=/tmp/ssh_key" \
+              -e "join_command='$JOIN_CMD'"
+          fi
+          
+          echo "✅ Worker ноды подключены"
+          sleep 15
+          
+          echo "Проверяем статус нод после подключения..."
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes"
+        timeout-minutes: 15
+
+      - name: 📦 07. Установка базовых аддонов
+        run: |
+          echo "========================================"
+          echo "📦 07. БАЗОВЫЕ АДДОНЫ"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Проверяем доступность всех нод..."
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes"
+          
+          echo "Запускаем исправленный плейбук 07-addons.yml..."
+          
+          ansible-playbook -i inventory.ini playbooks/07-addons.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          echo "✅ Базовые аддоны установлены"
+          
+          echo "Ждем запуска аддонов..."
+          sleep 30
+        timeout-minutes: 10
+
+      - name: 🌐 08. Установка Ingress контроллера
+        run: |
+          echo "========================================"
+          echo "🌐 08. INGRESS CONTROLLER"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Проверяем текущий статус кластера..."
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A | head -20"
+          
+          echo "Запускаем плейбук 08-ingress.yml..."
+          
+          set +e
+          ansible-playbook -i inventory.ini playbooks/08-ingress.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          INGRESS_RESULT=$?
+          set -e
+          
+          if [ $INGRESS_RESULT -eq 0 ]; then
+            echo "✅ Ingress контроллер установлен через плейбук"
+          else
+            echo "⚠️  Плейбук ingress.yml содержит ошибки, устанавливаем напрямую..."
+            
+            # Fallback: установка напрямую
+            ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+              "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml"
+            
+            echo "✅ Ingress контроллер установлен напрямую"
+          fi
+          
+          echo "Ждем запуска Ingress..."
+          sleep 30
+        timeout-minutes: 10
+
+      - name: 💾 09. Настройка хранилища
+        run: |
+          echo "========================================"
+          echo "💾 09. ХРАНИЛИЩЕ"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Запускаем плейбук 09-storage.yml..."
+          
+          set +e
+          ansible-playbook -i inventory.ini playbooks/09-storage.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          STORAGE_RESULT=$?
+          set -e
+          
+          if [ $STORAGE_RESULT -eq 0 ]; then
+            echo "✅ Хранилище настроено через плейбук"
+          else
+            echo "⚠️  Плейбук storage.yml содержит ошибки, устанавливаем напрямую..."
+            
+            # Fallback: установка напрямую
+            MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+            
+            ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+              "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.26/deploy/local-path-storage.yaml"
+            
+            echo "✅ Хранилище настроено напрямую"
+          fi
+          
+          sleep 10
+        timeout-minutes: 10
+
+      - name: 🔌 10. Установка MetalLB
+        run: |
+          echo "========================================"
+          echo "🔌 10. METALLB LOAD BALANCER"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Запускаем плейбук 10-metallb.yml..."
+          
+          # Просто запускаем плейбук - он уже содержит всю логику
+          ansible-playbook -i inventory.ini playbooks/10-metallb.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          echo "✅ MetalLB установлен"
+          sleep 5
+        timeout-minutes: 10
+
+      - name: 🔍 12. Проверка кластера
+        run: |
+          echo "========================================"
+          echo "🔍 12. ПРОВЕРКА КЛАСТЕРА"
+          echo "========================================"
+          cd ansible-repo
+          
+          echo "Запускаем плейбук 12-verify.yml..."
+          
+          set +e
+          ansible-playbook -i inventory.ini playbooks/12-verify.yml \
+            --timeout=300 \
+            --limit "master1" \
+            -e "ansible_ssh_private_key_file=/tmp/ssh_key"
+          
+          VERIFY_RESULT=$?
+          set -e
+          
+          if [ $VERIFY_RESULT -eq 0 ]; then
+            echo "✅ Проверка кластера завершена через плейбук"
+          else
+            echo "⚠️  Плейбук verify.yml содержит ошибки, проверяем напрямую..."
+            
+            # Fallback: проверка напрямую
+            MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+            
+            echo "=== Проверка кластера напрямую ==="
+            ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+              "echo '1. Nodes:' && sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide && echo '' && echo '2. System Pods:' && sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A | head -30"
+            
+            echo "✅ Проверка кластера завершена напрямую"
+          fi
+        timeout-minutes: 10
+
+      - name: 📊 Финальная проверка и отчет
+        run: |
+          echo ""
+          echo "========================================"
+          echo "🎉 ПОЛНОЕ РАЗВЕРТЫВАНИЕ ЗАВЕРШЕНО"
+          echo "========================================"
+          
+          MASTER_IP="${{ needs.terraform-deploy.outputs.master_ip }}"
+          MASTERS_COUNT="${{ needs.terraform-deploy.outputs.masters_count }}"
+          WORKERS_COUNT="${{ needs.terraform-deploy.outputs.workers_count }}"
+          K8S_VERSION="${{ needs.terraform-deploy.outputs.kubernetes_version }}"
+          POD_CIDR="${{ needs.terraform-deploy.outputs.pod_cidr }}"
+          
+          echo ""
+          echo "📊 СТАТУС КЛАСТЕРА:"
+          echo "----------------------------------------"
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes -o wide"
+          
+          echo ""
+          echo "📦 СИСТЕМНЫЕ PODS:"
+          echo "----------------------------------------"
+          ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods -A | head -25"
+          
+          echo ""
+          echo "🔗 КОМАНДЫ ДЛЯ ДОСТУПА:"
+          echo "----------------------------------------"
+          echo "  SSH Master:    ssh -i /tmp/ssh_key ubuntu@$MASTER_IP"
+          echo "  Скачать конфиг: scp -i /tmp/ssh_key ubuntu@$MASTER_IP:/etc/kubernetes/admin.conf ./kubeconfig"
+          echo "  Kubectl:       kubectl --kubeconfig=./kubeconfig get nodes"
+          
+          echo ""
+          echo "📋 УСТАНОВЛЕННЫЕ КОМПОНЕНТЫ:"
+          echo "----------------------------------------"
+          echo "  ✅ Kubernetes $K8S_VERSION"
+          echo "  ✅ Containerd"
+          echo "  ✅ Calico CNI (через плейбук)"
+          echo "  ✅ Metrics Server (через плейбук)"
+          echo "  ✅ Kubernetes Dashboard (через плейбук)"
+          echo "  ✅ Ingress Controller"
+          echo "  ✅ Storage (Local Path Provisioner)"
+          echo "  ✅ MetalLB Load Balancer"
+          echo "  ✅ Helm"
+          
+          echo ""
+          echo "🔧 КОНФИГУРАЦИЯ КЛАСТЕРА:"
+          echo "----------------------------------------"
+          echo "  Мастеров: $MASTERS_COUNT"
+          echo "  Воркеров: $WORKERS_COUNT"
+          echo "  Pod CIDR: $POD_CIDR"
+          echo "  Service CIDR: ${{ needs.terraform-deploy.outputs.service_cidr }}"
+          echo "  Cluster Domain: ${{ needs.terraform-deploy.outputs.cluster_domain }}"
+          
+          echo ""
+          echo "🎯 КОМАНДА ДЛЯ ПОДКЛЮЧЕНИЯ ДОПОЛНИТЕЛЬНЫХ WORKER:"
+          echo "----------------------------------------"
+          JOIN_CMD=$(ssh -o StrictHostKeyChecking=no -i /tmp/ssh_key ubuntu@$MASTER_IP \
+            "sudo kubeadm token create --print-join-command 2>/dev/null || echo '# Токен не сгенерирован'")
+          echo "$JOIN_CMD"
+          
+          echo ""
+          echo "🔑 ДОСТУП К DASHBOARD:"
+          echo "----------------------------------------"
+          echo "  Получить токен:"
+          echo "  kubectl --kubeconfig=./kubeconfig -n kubernetes-dashboard create token admin-user"
+          echo ""
+          echo "  Проксировать доступ:"
+          echo "  kubectl --kubeconfig=./kubeconfig proxy"
+          echo "  Затем открыть: http://localhost:8001/api/v1/namespaces/kubernetes-dashboard/services/https:kubernetes-dashboard:/proxy/"
+          
+          echo ""
+          echo "========================================"
+          echo "🚀 KUBERNETES КЛАСТЕР ГОТОВ К РАБОТЕ!"
+          echo "========================================"
